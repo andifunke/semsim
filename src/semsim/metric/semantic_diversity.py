@@ -49,7 +49,7 @@ def parse_args():
     parser.add_argument(
         '--load-corpus', dest='make_corpus', action='store_false', required=False
     )
-    parser.set_defaults(make_corpus=True)
+    parser.set_defaults(make_corpus=False)
 
     parser.add_argument(
         '--make-lsi', dest='make_lsi', action='store_true', required=False
@@ -57,12 +57,17 @@ def parse_args():
     parser.add_argument(
         '--load-lsi', dest='make_lsi', action='store_false', required=False
     )
-    parser.set_defaults(make_lsi=True)
+    parser.set_defaults(make_lsi=False)
 
     args = parser.parse_args()
 
     if args.pos_tags is not None:
         args.pos_tags = set(args.pos_tags)
+
+    if args.make_contexts:
+        args.make_corpus = True
+    if args.make_corpus:
+        args.make_lsi = True
 
     args.input_fn = DATASET_STREAMS[args.dataset]
 
@@ -89,19 +94,15 @@ def calculate_semantic_diversity(terms, dictionary, corpus, document_vectors):
     return pd.Series(semd_values)
 
 
-def lsi_transform(corpus, dictionary, nb_topics=300, use_callbacks=False, cache_in_memory=False):
+def lsi_transform(corpus, dictionary, nb_topics=300, cache_in_memory=False):
     if cache_in_memory:
         print("Loading corpus into memory")
         corpus = list(corpus)
-    if use_callbacks:
-        train, test = split_corpus(corpus)
-    else:
-        train, test = corpus, []
-    print(f"Size of... train_set={len(train)}, test_set={len(test)}")
+    print(f"Size of train_set={len(corpus)}")
 
     # --- train ---
     print(f"Training LSI model with {nb_topics} topics")
-    model = LsiModel(corpus=train, num_topics=nb_topics, id2word=dictionary, dtype=np.float32)
+    model = LsiModel(corpus=corpus, num_topics=nb_topics, id2word=dictionary, dtype=np.float32)
 
     # --- get vectors ---
     term_vectors = model.projection.u
@@ -118,26 +119,32 @@ def docs_to_lists(token_series):
     return token_series.tolist()
 
 
-def entropy_transform(corpus, dictionary, epsilon=.0001):
+def entropy_transform(corpus, dictionary, epsilon=1.0):
     # calculate "entropy" per token
-    entropy = Counter()
-    for context in corpus:
-        for index, value in context:
-            corpus_freq = dictionary.dfs[index]
-            p_c = value / corpus_freq
-            ic = -np.log(p_c)
-            # print(index, value, corpus_freq, p_c, ic)
-            entropy[index] += p_c * ic
-            if entropy[index] == 0:
-                raise ValueError(
-                    f"Entropy calculated as 0\n"
-                    f"{index}, {value}, {dictionary.id2token[index]}"
-                )
+    print('Calculating word entropy over all contexts.')
+    dfs = pd.Series(dictionary.dfs, name='contexts', dtype='int32').sort_index()
+    cfs = pd.Series(dictionary.cfs, name='wordcount', dtype='int32').sort_index()
+    df = pd.concat([dfs, cfs], axis=1,)
+    wordcount_per_mil = cfs.sum() / 1_000_000
+    df['freq'] = (df.wordcount / wordcount_per_mil).astype('float32')
+    df['log_freq'] = np.log10(df.freq.values + epsilon, dtype='float32')
+    df.loc[:, 'entropy'] = 0.
 
-    # calculate transformed value
+    for context in tqdm(corpus, total=len(corpus)):
+        if len(context) < 2:
+            continue
+        ctx_wordcount = pd.DataFrame.from_records(context).set_index(0).squeeze()
+        corpus_wordcount = df.wordcount[ctx_wordcount.index.values]
+        p_c = ctx_wordcount / corpus_wordcount
+        ic = -np.log(p_c)
+        ctx_ent = p_c * ic
+        df.iloc[ctx_wordcount.index.values, :].entropy += ctx_ent
+
+    # calculate transformed values
+    print('Normalizing corpus.')
     entropy_corpus = [
-        [(i, (np.log(v) + epsilon) / entropy[i]) for i, v in context]
-        for context in corpus
+        [(i, (np.log(v) + epsilon) / df.entropy[i]) for i, v in context]
+        for context in tqdm(corpus, total=len(corpus))
     ]
 
     return entropy_corpus
@@ -149,49 +156,11 @@ def tfidf_transform(bow_corpus):
     return tfidf_corpus
 
 
-def calculate_chunks(df, window):
-    print(f"Calculating chunks")
-    t0 = time()
-
-    def _chunk(group):
-        length = len(group)
-        if length <= window:
-            group['chunk'] = 1
-        else:
-            index = np.arange(length)
-            index = index % window == 0
-            index = index.cumsum()
-            group['chunk'] = index
-        return group
-
-    df = df.groupby(HASH, sort=False, as_index=False).progress_apply(_chunk)
-    print(f'time: {time() - t0}')
-    return df
-
-
-def remove_infrequent_words(df, min_freq, min_contexts):
-    print(f"Filtering words with total frequency < {min_freq}.")
-    size = len(df)
-    frequencies = df[TOKEN].value_counts()
-    frequencies = frequencies[frequencies >= min_freq]
-    df = df[df[TOKEN].isin(frequencies.index)]
-    print(f"{size} => {len(df)} - {size - len(df)} words removed.")
-
-    print(f"Filtering words appearing in less than {min_contexts} contexts.")
-    size = len(df)
-    frequencies = df.groupby([HASH, 'chunk'])[TOKEN].unique().explode().value_counts()
-    frequencies = frequencies[frequencies >= min_contexts]
-    df = df[df[TOKEN].isin(frequencies.index)]
-    print(f"{size} => {len(df)} - {size - len(df)} words removed.")
-
-    return df
-
-
-def texts2corpus(contexts, stopwords=None, filter_above=1, keep_n=200_000):
+def texts2corpus(contexts, stopwords=None, min_contexts=1, filter_above=1, keep_n=200_000):
     print(f"Generating bow corpus and dictionary")
 
     dictionary = Dictionary(contexts, prune_at=None)
-    dictionary.filter_extremes(no_above=filter_above, keep_n=keep_n)
+    dictionary.filter_extremes(no_below=min_contexts, no_above=filter_above, keep_n=keep_n)
 
     # filter some noise (e.g. special characters)
     if stopwords:
@@ -253,32 +222,17 @@ def get_contexts(args, directory, file_name):
     return contexts
 
 
-def get_corpus(contexts, args, directory, file_name):
-    if args.make_corpus:
-        # - make bow corpus -
-        bow_corpus, dictionary = texts2corpus(contexts, stopwords=None)
+def normalize(bow_corpus, dictionary, normalization, directory, file_name):
+    if normalization == 'tfidf':
+        # - tfidf transform corpus -
+        tfidf_corpus = tfidf_transform(bow_corpus)
 
-        # - save dictionary -
-        file_path = directory / f'{file_name}.dict'
+        # - save tf-idf corpus -
+        file_path = directory / f'{file_name}_tfidf.mm'
         print(f"Saving {file_path}")
-        dictionary.save(str(file_path))
-
-        # - save dictionary frequencies as plain text -
-        dict_table = pd.Series(dictionary.token2id).to_frame(name='idx')
-        dict_table['freq'] = dict_table['idx'].map(dictionary.cfs.get)
-        dict_table = dict_table.reset_index()
-        dict_table = dict_table.set_index('idx', drop=True).rename({'index': 'token'}, axis=1)
-        dict_table = dict_table.sort_index()
-        file_path = directory / f'{file_name}_dict.csv'
-        print(f"Saving {file_path}")
-        # dictionary.save_as_text(file_path, sort_by_word=False)
-        dict_table.to_csv(file_path, sep='\t')
-
-        # - save bow corpus -
-        file_path = directory / f'{file_name}_bow.mm'
-        print(f"Saving {file_path}")
-        MmCorpus.serialize(str(file_path), bow_corpus)
-
+        MmCorpus.serialize(str(file_path), tfidf_corpus)
+        corpus = tfidf_corpus
+    elif normalization == 'entropy':
         # - log transform and entropy-normalize corpus -
         entropy_corpus = entropy_transform(bow_corpus, dictionary)
 
@@ -286,38 +240,86 @@ def get_corpus(contexts, args, directory, file_name):
         file_path = directory / f'{file_name}_entropy.mm'
         print(f"Saving {file_path}")
         MmCorpus.serialize(str(file_path), entropy_corpus)
-
-        # - tfidf transform corpus -
-        tfidf_corpus = tfidf_transform(bow_corpus)
-
-        # - save entropy-normalized corpus -
-        file_path = directory / f'{file_name}_tfidf.mm'
-        print(f"Saving {file_path}")
-        MmCorpus.serialize(str(file_path), tfidf_corpus)
-
-        if args.tfidf:
-            file_name += '_tfidf'
-            corpus = tfidf_corpus
-            del entropy_corpus
-        else:
-            file_name += '_entropy'
-            corpus = entropy_corpus
-            del tfidf_corpus
+        corpus = entropy_corpus
     else:
-        # - load dictionary -
-        file_path = directory / f'{file_name}.dict'
-        print(f"Loading dictionary from {file_path}")
-        dictionary = Dictionary.load(str(file_path))
+        corpus = bow_corpus
 
-        # - load corpus -
-        if args.tfidf:
-            file_name += '_tfidf'
-            file_path = directory / f'{file_name}.mm'
-        else:
-            file_name += '_entropy'
-            file_path = directory / f'{file_name}.mm'
+    return corpus
+
+
+def make_corpus(args, directory, file_name):
+    contexts = get_contexts(args, directory, file_name)
+    bow_corpus, dictionary = texts2corpus(contexts, min_contexts=args.min_contexts, stopwords=None)
+
+    # - save dictionary -
+    file_path = directory / f'{file_name}.dict'
+    print(f"Saving {file_path}")
+    dictionary.save(str(file_path))
+
+    # - save dictionary frequencies as plain text -
+    dict_table = pd.Series(dictionary.token2id).to_frame(name='idx')
+    dict_table['freq'] = dict_table['idx'].map(dictionary.cfs.get)
+    dict_table = dict_table.reset_index()
+    dict_table = dict_table.set_index('idx', drop=True).rename({'index': 'token'}, axis=1)
+    dict_table = dict_table.sort_index()
+    file_path = directory / f'{file_name}_dict.csv'
+    print(f"Saving {file_path}")
+    # dictionary.save_as_text(file_path, sort_by_word=False)
+    dict_table.to_csv(file_path, sep='\t')
+
+    # - save bow corpus -
+    file_path = directory / f'{file_name}_bow.mm'
+    print(f"Saving {file_path}")
+    MmCorpus.serialize(str(file_path), bow_corpus)
+    corpus = normalize(bow_corpus, dictionary, args.normalization, directory, file_name)
+
+    return corpus, dictionary
+
+
+def load_bow_corpus(directory, file_name):
+    file_name += '_bow'
+    file_path = directory / f'{file_name}.mm'
+    print(f"Loading BOW corpus from {file_path}")
+    corpus = MmCorpus(str(file_path))
+
+    return corpus
+
+
+def load_corpus(args, directory, file_name):
+    # - load dictionary -
+    file_path = directory / f'{file_name}.dict'
+    print(f"Loading dictionary from {file_path}")
+    dictionary = Dictionary.load(str(file_path))
+
+    # - load corpus -
+    if args.normalization is None:
+        return load_bow_corpus(directory, file_name)
+
+    try:
+        if args.normalization == 'tfidf':
+            file_path = directory / f'{file_name}_tfidf.mm'
+        elif args.normalization == 'entropy':
+            file_path = directory / f'{file_name}_entropy.mm'
+
         print(f"Loading corpus from {file_path}")
         corpus = MmCorpus(str(file_path))
+    except FileNotFoundError as e:
+        print(e)
+        bow_corpus = load_bow_corpus(directory, file_name)
+        corpus = normalize(bow_corpus, dictionary, args.normalization, directory, file_name)
+
+    return corpus, dictionary
+
+
+def get_corpus(args, directory, file_name):
+    if args.make_corpus:
+        corpus, dictionary = make_corpus(args, directory, file_name)
+    else:
+        try:
+            corpus, dictionary = load_corpus(args, directory, file_name)
+        except FileNotFoundError as e:
+            print(e)
+            corpus, dictionary = make_corpus(args, directory, file_name)
 
     return corpus, dictionary
 
@@ -326,7 +328,7 @@ def get_document_vectors(corpus, dictionary, args, directory, file_name):
     if args.make_lsi:
         model, document_vectors, term_vectors = lsi_transform(
             corpus=corpus, dictionary=dictionary, nb_topics=args.nb_topics,
-            use_callbacks=False, cache_in_memory=True
+            cache_in_memory=True
         )
 
         # --- save model ---
@@ -360,8 +362,7 @@ def main():
     directory = SEMD_DIR / args.version
     directory.mkdir(exist_ok=True, parents=True)
 
-    contexts = get_contexts(args, directory, file_name)
-    corpus, dictionary = get_corpus(contexts, args, directory, file_name)
+    corpus, dictionary = get_corpus(args, directory, file_name)
     document_vectors = get_document_vectors(corpus, dictionary, args, directory, file_name)
 
     # --- calculate semd for vocabulary ---
