@@ -52,8 +52,6 @@ def parse_args():
     if args.pos_tags is not None:
         args.pos_tags = set(args.pos_tags)
 
-    if args.make_contexts:
-        args.make_corpus = True
     if args.make_corpus:
         args.make_lsi = True
 
@@ -212,7 +210,7 @@ def normalize(bow_corpus, dictionary, normalization, directory, file_name):
 
 
 def make_corpus(args, directory, file_name):
-    contexts = get_contexts(args, directory, file_name)
+    contexts = get_contexts(args)
     bow_corpus, dictionary = texts2corpus(contexts, min_contexts=args.min_contexts, stopwords=None)
 
     # - save dictionary -
