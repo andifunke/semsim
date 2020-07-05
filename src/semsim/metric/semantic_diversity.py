@@ -123,6 +123,24 @@ def calc_entropy(corpus, corpus_freqs):
     return entropy
 
 
+def calc_entropy_normalization(corpus, word_entropies, epsilon):
+    print('Normalizing corpus.')
+
+    word_entropies = word_entropies.astype(np.float32)
+    epsilon = np.float32(epsilon)
+    transformed_corpus = []
+    for context in tqdm(corpus, total=len(corpus)):
+        context_arr = np.asarray(context, dtype=np.float32).T
+        token_ids = context_arr[0].astype(np.int32)
+        context_freq = context_arr[1]
+        context_entropy = word_entropies[token_ids]
+        transformations = (np.log(context_freq) + epsilon) / context_entropy
+        transformed_context = [x for x in zip(token_ids, transformations)]
+        transformed_corpus.append(transformed_context)
+
+    return transformed_corpus
+
+
 def entropy_transform(corpus, dictionary, epsilon=1.0, use_cache=True):
 
     # TODO: individualize file name based on args
@@ -134,7 +152,7 @@ def entropy_transform(corpus, dictionary, epsilon=1.0, use_cache=True):
     df = None
     if use_cache:
         try:
-            df = pd.read_csv(file_path)
+            df = pd.read_csv(file_path, sep='\t')
         except FileNotFoundError:
             print(f'Could not read cache from {file_path}')
 
@@ -153,14 +171,11 @@ def entropy_transform(corpus, dictionary, epsilon=1.0, use_cache=True):
         df.to_csv(file_path, sep='\t')
 
     # calculate transformation
-    print('Normalizing corpus.')
-    # TODO: vectorize
-    entropy_corpus = [
-        [(i, (np.log(v) + epsilon) / df.entropy[i]) for i, v in context]
-        for context in tqdm(corpus, total=len(corpus))
-    ]
+    transformed_corpus = calc_entropy_normalization(
+        corpus, word_entropies=df.entropy.values, epsilon=epsilon
+    )
 
-    return entropy_corpus
+    return transformed_corpus
 
 
 def tfidf_transform(bow_corpus):
