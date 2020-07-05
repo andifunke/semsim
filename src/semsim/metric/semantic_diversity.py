@@ -1,7 +1,8 @@
 import argparse
-from collections import Counter
+import warnings
+# TODO: remove when tqdm fully supports pandas >= 0.25
+warnings.simplefilter(action='ignore', category=FutureWarning)
 from pathlib import Path
-from time import time
 from typing import Iterable, List
 
 import numpy as np
@@ -13,7 +14,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 from tqdm import tqdm
 
 from semsim import DATASET_STREAMS
-from semsim.constants import SEMD_DIR
+from semsim.constants import SEMD_DIR, CACHE_DIR
 from semsim.corpus.dataio import reader
 
 tqdm.pandas()
@@ -105,29 +106,52 @@ def docs_to_lists(token_series):
     return token_series.tolist()
 
 
-def entropy_transform(corpus, dictionary, epsilon=1.0):
+def entropy_transform(corpus, dictionary, epsilon=1.0, use_cache=True):
+
+    # TODO: individualize file name based on args
+    file_name = 'entropy_transform.csv'
+    dir_path = CACHE_DIR / 'SemD'
+    dir_path.mkdir(exist_ok=True, parents=True)
+    file_path = dir_path / file_name
+
+    df = None
+    if use_cache:
+        try:
+            df = pd.read_csv(file_path)
+        except FileNotFoundError:
+            print(f'Could not read cache from {file_path}')
+
     # calculate "entropy" per token
-    print('Calculating word entropy over all contexts.')
-    dfs = pd.Series(dictionary.dfs, name='contexts', dtype='int32').sort_index()
-    cfs = pd.Series(dictionary.cfs, name='wordcount', dtype='int32').sort_index()
-    df = pd.concat([dfs, cfs], axis=1,)
-    wordcount_per_mil = cfs.sum() / 1_000_000
-    df['freq'] = (df.wordcount / wordcount_per_mil).astype('float32')
-    df['log_freq'] = np.log10(df.freq.values + epsilon, dtype='float32')
-    df.loc[:, 'entropy'] = 0.
+    if df is None:
+        print('Calculating word entropy over all contexts.')
+        dfs = pd.Series(dictionary.dfs, name='context_freq', dtype='int32').sort_index()
+        cfs = pd.Series(dictionary.cfs, name='corpus_freq', dtype='int32').sort_index()
+        df = pd.concat([dfs, cfs], axis=1, )
+        df['token_id'] = df.index
+        df['token'] = df.token_id.map(lambda x: dictionary[x])
+        wordcount_per_mil = cfs.sum() / 1_000_000
+        df['freq'] = (df.corpus_freq / wordcount_per_mil).astype('float32')
+        df['log_freq'] = np.log10(df.freq.values + epsilon, dtype='float32')
+        df['entropy'] = 0.
 
-    for context in tqdm(corpus, total=len(corpus)):
-        if len(context) < 2:
-            continue
-        ctx_wordcount = pd.DataFrame.from_records(context).set_index(0).squeeze()
-        corpus_wordcount = df.wordcount[ctx_wordcount.index.values]
-        p_c = ctx_wordcount / corpus_wordcount
-        ic = -np.log(p_c)
-        ctx_ent = p_c * ic
-        df.iloc[ctx_wordcount.index.values, :].entropy += ctx_ent
+        # TODO: vectorize, parallelize or use numba
+        for context in tqdm(corpus, total=len(corpus)):
+            if len(context) < 2:
+                continue
+            context_freq = pd.DataFrame.from_records(context).set_index(0).squeeze()
+            token_ids = context_freq.index.values
+            corpus_freq = df.corpus_freq[token_ids]
+            p_c = context_freq / corpus_freq
+            ic = -np.log(p_c)
+            ctx_ent = p_c * ic
+            df.loc[token_ids, 'entropy'] += ctx_ent
 
-    # calculate transformed values
+        df = df.set_index('token')
+        df.to_csv(file_path, sep='\t')
+
+    # calculate transformation
     print('Normalizing corpus.')
+    # TODO: vectorize
     entropy_corpus = [
         [(i, (np.log(v) + epsilon) / df.entropy[i]) for i, v in context]
         for context in tqdm(corpus, total=len(corpus))
