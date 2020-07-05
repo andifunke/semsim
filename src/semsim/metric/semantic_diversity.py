@@ -106,6 +106,23 @@ def docs_to_lists(token_series):
     return token_series.tolist()
 
 
+def calc_entropy(corpus, corpus_freqs):
+    print('Calculating word entropy over all contexts.')
+
+    entropy = np.zeros_like(corpus_freqs, dtype=np.float32)
+    for context in tqdm(corpus, total=len(corpus)):
+        context = np.asarray(context, dtype=np.int32).T
+        token_ids = context[0]
+        context_freq = context[1]
+        corpus_freq = corpus_freqs[token_ids]
+        p_c = context_freq / corpus_freq
+        ic = -np.log(p_c)
+        ctx_ent = p_c * ic
+        entropy[token_ids] += ctx_ent
+
+    return entropy
+
+
 def entropy_transform(corpus, dictionary, epsilon=1.0, use_cache=True):
 
     # TODO: individualize file name based on args
@@ -123,29 +140,15 @@ def entropy_transform(corpus, dictionary, epsilon=1.0, use_cache=True):
 
     # calculate "entropy" per token
     if df is None:
-        print('Calculating word entropy over all contexts.')
         dfs = pd.Series(dictionary.dfs, name='context_freq', dtype='int32').sort_index()
         cfs = pd.Series(dictionary.cfs, name='corpus_freq', dtype='int32').sort_index()
         df = pd.concat([dfs, cfs], axis=1, )
-        df['token_id'] = df.index
-        df['token'] = df.token_id.map(lambda x: dictionary[x])
         wordcount_per_mil = cfs.sum() / 1_000_000
         df['freq'] = (df.corpus_freq / wordcount_per_mil).astype('float32')
         df['log_freq'] = np.log10(df.freq.values + epsilon, dtype='float32')
-        df['entropy'] = 0.
-
-        # TODO: vectorize, parallelize or use numba
-        for context in tqdm(corpus, total=len(corpus)):
-            if len(context) < 2:
-                continue
-            context_freq = pd.DataFrame.from_records(context).set_index(0).squeeze()
-            token_ids = context_freq.index.values
-            corpus_freq = df.corpus_freq[token_ids]
-            p_c = context_freq / corpus_freq
-            ic = -np.log(p_c)
-            ctx_ent = p_c * ic
-            df.loc[token_ids, 'entropy'] += ctx_ent
-
+        df['entropy'] = calc_entropy(corpus, corpus_freqs=df.corpus_freq.values)
+        df['token_id'] = df.index
+        df['token'] = df.token_id.map(lambda x: dictionary[x])
         df = df.set_index('token')
         df.to_csv(file_path, sep='\t')
 
