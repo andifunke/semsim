@@ -17,24 +17,26 @@ TAGS = {
     'INTERJ', 'PUL'
 }
 
+# TODO: add command line arguments
+
 
 def stream_bnc(
-        directory: PathLike = None,
         chunk_size: int = None,
         tagged: bool = False,
         lowercase: bool = False,
         tags_blocklist: list = None,
+        directory: PathLike = None,
 ) -> Generator[List[Union[str, Tuple[str, str]]], None, None]:
     """
     Parses documents from the original BNC XML corpus and streams as list of strings or tuples.
 
-    :param directory: Path to a BNC XML corpus. Uses the default path if None.
     :param chunk_size: Splits the documents in contexts of a maximum window size.
     :param tagged: if False: items of the yielded lists are string tokens.
                    if True: items of the yielded lists are tuples in the format
                    ``(token, pos_tag)``.
     :param lowercase: Convert all tokens to lowercase if True.
     :param tags_blocklist: Remove all tokens from the contexts with pos-tags in this blocklist.
+    :param directory: Optional path to a BNC XML corpus. Uses the default path if None.
 
     :returns: Generator that yields documents/contexts as lists of tokens.
     """
@@ -102,24 +104,27 @@ def infer_file_path(
 
 
 def persist_transformation(
-        directory: PathLike = None,
         chunk_size: int = None,
         tagged: bool = False,
         lowercase: bool = False,
         tags_blocklist: list = None,
+        directory: PathLike = None,
+        documents: List[List] = None,
 ):
     """
     Parses documents from the original BNC XML format and writes it as plain text to a file.
 
     The file is written to ``data/out/cache/bnc[args].txt``.
 
-    :param directory: Path to a BNC XML corpus. Uses the default path if None.
     :param chunk_size: Splits the documents in contexts of a maximum window size.
     :param tagged:
         if False: items of the yielded lists are string tokens.
         if True: items of the yielded lists are tuples in the format ``(token, pos_tag)``.
     :param lowercase: Converts all tokens to lowercase if True.
     :param tags_blocklist: Removes all tokens from the contexts with pos-tags in this blocklist.
+    :param directory: Optional: path to a BNC XML corpus. Uses the default path if None.
+    :param documents: Optional: pass an already loaded and parsed corpus as list of lists.
+        Omits reading the corpus again.
     """
 
     out_path = infer_file_path(
@@ -128,21 +133,22 @@ def persist_transformation(
         lowercase=lowercase,
         tags_blocklist=tags_blocklist,
     )
-    contexts = stream_bnc(
-        directory=directory,
-        chunk_size=chunk_size,
-        tagged=tagged,
-        lowercase=lowercase,
-        tags_blocklist=tags_blocklist,
-    )
+    if documents is None:
+        documents = stream_bnc(
+            chunk_size=chunk_size,
+            tagged=tagged,
+            lowercase=lowercase,
+            tags_blocklist=tags_blocklist,
+            directory=directory,
+        )
 
     # - write corpus as plain text -
     out_path.parent.mkdir(exist_ok=True, parents=True)
     with open(out_path, 'w') as fp:
         print(f"Writing to {out_path}")
-        for context in contexts:
-            context = ' '.join(context).replace('\n', '<P>')
-            fp.write(context + '\n')
+        for doc in documents:
+            doc = ' '.join(doc).replace('\n', '<P>')
+            fp.write(doc + '\n')
 
     # - write arguments as meta data -
     with open(out_path.with_suffix('.json'), 'w') as fp:
@@ -186,39 +192,59 @@ def load_from_cache(
     )
     # TODO: read meta data first and verify identity of tags_blocklist
 
-    with open(out_path, 'r') as fp:
-        print(f"Loading {out_path}")
-        contexts = [c.split() for c in fp.readlines()]
+    try:
+        with open(out_path, 'r') as fp:
+            print(f"Loading {out_path}")
+            docs = [c.split() for c in fp.readlines()]
+    except FileNotFoundError:
+        make_if_not_cached |= persist_if_not_cached
+        if make_if_not_cached:
+            docs = read_bnc(
+                chunk_size=chunk_size,
+                tagged=tagged,
+                lowercase=lowercase,
+                tags_blocklist=tags_blocklist,
+            )
+            if persist_if_not_cached:
+                persist_transformation(
+                    documents=docs,
+                    chunk_size=chunk_size,
+                    tagged=tagged,
+                    lowercase=lowercase,
+                    tags_blocklist=tags_blocklist
+                )
+        else:
+            docs = None
 
-    # TODO: implement fallback modes.
-
-    return contexts
+    return docs
 
 
-def example():
-    docs = stream_bnc(
-        chunk_size=1000,
-        tagged=True,
-        lowercase=True,
-        tags_blocklist=['PUL', 'PUN', 'PUQ']
-    )
-    for doc in docs:
-        print(len(doc), doc[:50])
+def example(exmple='read'):
+    if exmple == 'stream':
+        docs = stream_bnc(
+            chunk_size=1000,
+            tagged=True,
+            lowercase=True,
+            tags_blocklist=['PUL', 'PUN', 'PUQ']
+        )
+        for doc in docs:
+            print(len(doc), doc[:50])
+    elif exmple == 'write':
+        persist_transformation(
+            chunk_size=1000,
+            tagged=False,
+            lowercase=True,
+            tags_blocklist=['PUL', 'PUN', 'PUQ']
+        )
+    elif exmple == 'load':
+        docs = load_from_cache(
+            chunk_size=1000,
+            tagged=False,
+            lowercase=True,
+            tags_blocklist=['PUL', 'PUN', 'PUQ']
+        )
+        print(docs[:10])
 
 
 if __name__ == '__main__':
-    # example()
-    # TODO: refactor as command line arguments
-    # persist_transformation(
-    #     chunk_size=1000,
-    #     tagged=False,
-    #     lowercase=True,
-    #     tags_blocklist=['PUL', 'PUN', 'PUQ']
-    # )
-    docs = load_from_cache(
-        chunk_size=1000,
-        tagged=False,
-        lowercase=True,
-        tags_blocklist=['PUL', 'PUN', 'PUQ']
-    )
-    print(docs[:10])
+    example('load')

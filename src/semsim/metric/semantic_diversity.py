@@ -22,11 +22,10 @@ tqdm.pandas()
 def parse_args():
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--dataset', type=str, required=True,
-                        choices=DATASET_STREAMS.keys())
-    parser.add_argument('--version', type=str, required=False, default='default')
+    parser.add_argument('--corpus', type=str, required=True, choices=DATASET_STREAMS.keys())
+    parser.add_argument('-v', '--version', type=str, required=False, default='default')
     parser.add_argument('--window', type=int, required=False, default=1000)
-    parser.add_argument('--min-word-freq', type=int, required=False, default=50)
+    parser.add_argument('--min-word-freq', type=int, required=False, default=50)  # TODO: implement
     parser.add_argument('--min-contexts', type=int, required=False, default=40)
     parser.add_argument('--nb-topics', type=int, required=False, default=300)
     parser.add_argument('--pos-tags', nargs='*', type=str, required=False)
@@ -37,7 +36,8 @@ def parse_args():
                         help="File path containing terms")
 
     parser.add_argument('--lowercase', action='store_true', required=False)
-    parser.set_defaults(lowercase=False)
+    parser.add_argument('--no-lowercase', dest='lowercase', action='store_true', required=False)
+    parser.set_defaults(lowercase=True)
 
     parser.add_argument('--make-corpus', dest='make_corpus', action='store_true', required=False)
     parser.add_argument('--load-corpus', dest='make_corpus', action='store_false', required=False)
@@ -55,7 +55,7 @@ def parse_args():
     if args.make_corpus:
         args.make_lsi = True
 
-    args.input_fn = DATASET_STREAMS[args.dataset]
+    args.input_fn = DATASET_STREAMS[args.corpus]
 
     return args
 
@@ -142,17 +142,39 @@ def tfidf_transform(bow_corpus):
     return tfidf_corpus
 
 
-def texts2corpus(contexts, stopwords=None, min_contexts=1, filter_above=1, keep_n=200_000):
-    print(f"Generating bow corpus and dictionary")
+def texts2corpus(
+        contexts, stopwords=None, min_word_freq=1, min_contexts=1, filter_above=1, keep_n=1_000_000
+):
+    print(f"Generating dictionary.")
 
     dictionary = Dictionary(contexts, prune_at=None)
+
+    vocab_size = len(dictionary)
     dictionary.filter_extremes(no_below=min_contexts, no_above=filter_above, keep_n=keep_n)
+    print(
+        f"Removing {vocab_size - len(dictionary)} tokens "
+        f"appearing in less than {min_contexts} contexts."
+    )
+    vocab_size = len(dictionary)
 
-    # filter some noise (e.g. special characters)
+    # filter noise (e.g. stopwords, special characters, infrequent words)
     if stopwords:
-        stopword_ids = [dictionary.token2id[token] for token in stopwords]
-        dictionary.filter_tokens(bad_ids=stopword_ids, good_ids=None)
+        bad_ids = [dictionary.token2id[token] for token in stopwords]
+        dictionary.filter_tokens(bad_ids=bad_ids, good_ids=None)
+        print(f"Removing {len(dictionary) - vocab_size} stopword tokens.")
+        vocab_size = len(dictionary)
 
+    if min_word_freq > 1:
+        bad_ids = [k for k, v in dictionary.cfs.items() if v < min_word_freq]
+        dictionary.filter_tokens(bad_ids=bad_ids, good_ids=None)
+        print(
+            f"Removing {vocab_size - len(dictionary)} tokens with min frequency < {min_word_freq}."
+        )
+
+    dictionary.compactify()
+    print(f"Dictionary size: {len(dictionary)}")
+
+    print(f"Generating bow corpus from {len(contexts)} contexts.")
     bow_corpus = [dictionary.doc2bow(text) for text in contexts]
 
     return bow_corpus, dictionary
@@ -177,6 +199,7 @@ def get_contexts(args):
         chunk_size=args.window,
         tagged=False,
         lowercase=args.lowercase,
+        # tags_allowlist=args.pos_tags,  # TODO: implement
         tags_blocklist=['PUL', 'PUN', 'PUQ'],  # TODO: add to args
         make_if_not_cached=True,
         persist_if_not_cached=True,
@@ -211,7 +234,9 @@ def normalize(bow_corpus, dictionary, normalization, directory, file_name):
 
 def make_corpus(args, directory, file_name):
     contexts = get_contexts(args)
-    bow_corpus, dictionary = texts2corpus(contexts, min_contexts=args.min_contexts, stopwords=None)
+    bow_corpus, dictionary = texts2corpus(
+        contexts, min_word_freq=args.min_word_freq, min_contexts=args.min_contexts, stopwords=None
+    )
 
     # - save dictionary -
     file_path = directory / f'{file_name}.dict'
@@ -320,7 +345,7 @@ def main():
     args = parse_args()
     print(args)
 
-    file_name = f'{args.dataset}_{args.version}'
+    file_name = f'{args.corpus}_{args.version}'
     directory = SEMD_DIR / args.version
     directory.mkdir(exist_ok=True, parents=True)
 
