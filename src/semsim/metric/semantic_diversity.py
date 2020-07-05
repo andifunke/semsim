@@ -14,6 +14,7 @@ from tqdm import tqdm
 
 from semsim import DATASET_STREAMS
 from semsim.constants import SEMD_DIR
+from semsim.corpus.dataio import reader
 
 tqdm.pandas()
 
@@ -35,28 +36,15 @@ def parse_args():
     parser.add_argument('--terms', type=str, required=False,
                         help="File path containing terms")
 
-    parser.add_argument(
-        '--make-contexts', dest='make_contexts', action='store_true', required=False
-    )
-    parser.add_argument(
-        '--load-contexts', dest='make_contexts', action='store_false', required=False
-    )
-    parser.set_defaults(make_contexts=False)
+    parser.add_argument('--lowercase', action='store_true', required=False)
+    parser.set_defaults(lowercase=False)
 
-    parser.add_argument(
-        '--make-corpus', dest='make_corpus', action='store_true', required=False
-    )
-    parser.add_argument(
-        '--load-corpus', dest='make_corpus', action='store_false', required=False
-    )
+    parser.add_argument('--make-corpus', dest='make_corpus', action='store_true', required=False)
+    parser.add_argument('--load-corpus', dest='make_corpus', action='store_false', required=False)
     parser.set_defaults(make_corpus=False)
 
-    parser.add_argument(
-        '--make-lsi', dest='make_lsi', action='store_true', required=False
-    )
-    parser.add_argument(
-        '--load-lsi', dest='make_lsi', action='store_false', required=False
-    )
+    parser.add_argument('--make-lsi', dest='make_lsi', action='store_true', required=False)
+    parser.add_argument('--load-lsi', dest='make_lsi', action='store_false', required=False)
     parser.set_defaults(make_lsi=False)
 
     args = parser.parse_args()
@@ -185,40 +173,16 @@ def chunks_from_documents(documents: Iterable, window_size: int) -> List:
     return contexts
 
 
-def load_contexts(directory, file_name):
-    file_path = directory / f'{file_name}_contexts.txt'
-    print(f"Loading {file_path}")
-    with open(file_path, 'r') as fp:
-        contexts = [c.split() for c in fp.readlines()]
-
-    return contexts
-
-
-def make_contexts(args, directory, file_name):
-    print(f'Reading {args.dataset.upper()}')
-
-    # - save contexts -
-    file_path = directory / f'{file_name}_contexts.txt'
-    print(f"Writing to {file_path}")
-    contexts = args.input_fn(chunk_size=args.window, tagged=args.pos_tags is not None)
-    with open(file_path, 'w') as fp:
-        for context in contexts:
-            context = ' '.join(context).replace('\n', '<P>')
-            fp.write(context + '\n')
-
-    return load_contexts(directory, file_name)
-
-
-def get_contexts(args, directory, file_name):
-    if args.make_contexts:
-        contexts = make_contexts(args, directory, file_name)
-    else:
-        try:
-            contexts = load_contexts(directory, file_name)
-        except FileNotFoundError as e:
-            print(e)
-            contexts = make_contexts(args, directory, file_name)
-
+def get_contexts(args):
+    read_fn = reader(args.corpus)
+    contexts = read_fn(
+        chunk_size=args.window,
+        tagged=False,
+        lowercase=args.lowercase,
+        tags_blocklist=['PUL', 'PUN', 'PUQ'],  # TODO: add to args
+        make_if_not_cached=True,
+        persist_if_not_cached=True,
+    )
     return contexts
 
 
