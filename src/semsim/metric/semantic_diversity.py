@@ -1,6 +1,9 @@
 import argparse
 import warnings
+
 # TODO: remove when tqdm fully supports pandas >= 0.25
+from sklearn.metrics.pairwise import cosine_similarity
+
 warnings.simplefilter(action='ignore', category=FutureWarning)
 from pathlib import Path
 from typing import Iterable, List
@@ -10,7 +13,6 @@ import pandas as pd
 from gensim.corpora import Dictionary, MmCorpus
 from gensim.matutils import corpus2dense, corpus2csc
 from gensim.models import TfidfModel, LsiModel
-from sklearn.metrics.pairwise import cosine_similarity
 from tqdm import tqdm
 
 from semsim import DATASET_STREAMS
@@ -18,15 +20,23 @@ from semsim.constants import SEMD_DIR, CACHE_DIR
 from semsim.corpus.dataio import reader
 
 tqdm.pandas()
+np.random.seed(42)
 
 
-def parse_args():
+def parse_args() -> argparse.Namespace:
+    """
+    Parses module-specific arguments. Solves argument dependencies and
+    returns cleaned up arguments.
+
+    :returns: arguments object
+    """
+
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--corpus', type=str, required=True, choices=DATASET_STREAMS.keys())
+    parser.add_argument('-c', '--corpus', type=str, required=True, choices=DATASET_STREAMS.keys())
     parser.add_argument('-v', '--version', type=str, required=False, default='default')
-    parser.add_argument('--window', type=int, required=False, default=1000)
-    parser.add_argument('--min-word-freq', type=int, required=False, default=50)  # TODO: implement
+    parser.add_argument('-w', '--window', type=int, required=False, default=1000)
+    parser.add_argument('--min-word-freq', type=int, required=False, default=50)
     parser.add_argument('--min-contexts', type=int, required=False, default=40)
     parser.add_argument('--nb-topics', type=int, required=False, default=300)
     parser.add_argument('--pos-tags', nargs='*', type=str, required=False)
@@ -62,23 +72,36 @@ def parse_args():
 
 
 def calculate_semantic_diversity(terms, dictionary, corpus, document_vectors):
+    print('Calculate Semantic Diversity.')
+
     csc_matrix = corpus2csc(corpus, dtype=np.float32)
 
+    mean_cos = {}
     semd_values = {}
-    for term in tqdm(terms, total=len(terms)):
+    for term in tqdm(terms, total=len(terms)):  # TODO: vectorize
         try:
             term_id = dictionary.token2id[term]
             term_docs_sparse = csc_matrix.getrow(term_id)
             term_doc_ids = term_docs_sparse.nonzero()[1]
+
+            # if target appears in >2000 documents, subsample 2000 at random
+            if len(term_doc_ids) > 2000:
+                term_doc_ids = np.random.choice(term_doc_ids, size=2000, replace=False)
+
             term_doc_vectors = document_vectors[term_doc_ids]
             similarities = cosine_similarity(term_doc_vectors)
+            lower_tri = np.tril_indices(similarities.shape[0], k=1)
+            similarities = similarities[lower_tri]
             avg_similarity = np.mean(similarities)
             semd = -np.log10(avg_similarity)
+            mean_cos[term] = avg_similarity
             semd_values[term] = semd
         except KeyError:
             semd_values[term] = np.nan
 
-    return pd.Series(semd_values)
+    semd = pd.DataFrame([mean_cos, semd_values], index=['mean_cos', 'SemD']).T
+
+    return semd
 
 
 def lsi_transform(corpus, dictionary, nb_topics=300, cache_in_memory=False):
@@ -340,7 +363,7 @@ def load_corpus(args, directory, file_name):
     return corpus, dictionary
 
 
-def get_corpus(args, directory, file_name):
+def get_sparse_corpus(args, directory, file_name):
     if args.make_corpus:
         corpus, dictionary = make_corpus(args, directory, file_name)
     else:
@@ -353,34 +376,50 @@ def get_corpus(args, directory, file_name):
     return corpus, dictionary
 
 
-def get_document_vectors(corpus, dictionary, args, directory, file_name):
-    if args.make_lsi:
-        model, document_vectors, term_vectors = lsi_transform(
-            corpus=corpus, dictionary=dictionary, nb_topics=args.nb_topics,
-            cache_in_memory=True
-        )
+def make_lsi(corpus, dictionary, args, directory, file_name):
+    model, document_vectors, term_vectors = lsi_transform(
+        corpus=corpus, dictionary=dictionary, nb_topics=args.nb_topics,
+        cache_in_memory=True
+    )
 
-        # --- save model ---
-        file_path = directory / f'{file_name}_lsi.model'
-        print(f"Saving model to {file_path}")
-        model.save(str(file_path))
+    # --- save model ---
+    file_path = directory / f'{file_name}_lsi.model'
+    print(f"Saving model to {file_path}")
+    model.save(str(file_path))
 
-        # --- save document vectors ---
-        file_path = directory / f'{file_name}_lsi_document_vectors.csv'
-        print(f"Saving document vectors to {file_path}")
-        document_vectors.to_csv(file_path)
+    # --- save document vectors ---
+    file_path = directory / f'{file_name}_lsi_document_vectors.csv'
+    print(f"Saving document vectors to {file_path}")
+    document_vectors.to_csv(file_path)
 
-        # --- save term vectors ---
-        file_path = directory / f'{file_name}_lsi_term_vectors.csv'
-        print(f"Saving document vectors to {file_path}")
-        term_vectors.to_csv(file_path)
-    else:
-        # --- load document vectors ---
-        file_path = directory / f'{file_name}_lsi_document_vectors.csv'
-        print(f"Loading document vectors from {file_path}")
-        document_vectors = pd.read_csv(file_path, index_col=0)
+    # --- save term vectors ---
+    file_path = directory / f'{file_name}_lsi_term_vectors.csv'
+    print(f"Saving document vectors to {file_path}")
+    term_vectors.to_csv(file_path)
 
     return document_vectors
+
+
+def load_lsi(directory, file_name):
+    # --- load document vectors ---
+    file_path = directory / f'{file_name}_lsi_document_vectors.csv'
+    print(f"Loading document vectors from {file_path}")
+    document_vectors = pd.read_csv(file_path, index_col=0, dtype=np.float32)
+
+    return document_vectors
+
+
+def get_lsi_corpus(corpus, dictionary, args, directory, file_name):
+    if args.make_lsi:
+        lsi_vectors = make_lsi(corpus, dictionary, args, directory, file_name)
+    else:
+        try:
+            lsi_vectors = load_lsi(directory, file_name)
+        except FileNotFoundError as e:
+            print(e)
+            lsi_vectors = make_lsi(corpus, dictionary, args, directory, file_name)
+
+    return lsi_vectors
 
 
 def main():
@@ -391,10 +430,11 @@ def main():
     directory = SEMD_DIR / args.version
     directory.mkdir(exist_ok=True, parents=True)
 
-    corpus, dictionary = get_corpus(args, directory, file_name)
-    document_vectors = get_document_vectors(corpus, dictionary, args, directory, file_name)
+    # --- create a sparse corpus ---
+    corpus, dictionary = get_sparse_corpus(args, directory, file_name)
+    lsi_vectors = get_lsi_corpus(corpus, dictionary, args, directory, file_name)
 
-    # --- calculate semd for vocabulary ---
+    # --- calculate SemD for vocabulary ---
     if args.terms:
         terms_path = Path(args.terms).resolve()
         with open(terms_path) as fp:
@@ -404,11 +444,11 @@ def main():
     else:
         terms = dictionary.token2id.keys()
         file_path = directory / f'{file_name}.semd'
-    semd_values = calculate_semantic_diversity(terms, dictionary, corpus, document_vectors.values)
+    semd_values = calculate_semantic_diversity(terms, dictionary, corpus, lsi_vectors.values)
 
     # - save SemD values for vocabulary -
     print(f"Saving SemD values to {file_path}")
-    semd_values.to_csv(file_path)
+    semd_values.to_csv(file_path, sep='\t')
 
     print(semd_values)
 
