@@ -172,9 +172,10 @@ def persist_transformation(
     out_path.parent.mkdir(exist_ok=True, parents=True)
     with open(out_path, 'w') as fp:
         print(f"Writing to {out_path}")
-        for doc in documents:
+        for i, doc in enumerate(documents):
             doc = ' '.join(doc).replace('\n', '<P>')
             fp.write(doc + '\n')
+        print(f'{i} lines written.')
 
     # - write arguments as meta data -
     with open(out_path.with_suffix('.json'), 'w') as fp:

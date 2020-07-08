@@ -1,18 +1,16 @@
 import argparse
 import warnings
+from pathlib import Path
 
 # TODO: remove when tqdm fully supports pandas >= 0.25
-from sklearn.metrics.pairwise import cosine_similarity
-
 warnings.simplefilter(action='ignore', category=FutureWarning)
-from pathlib import Path
-from typing import Iterable, List
 
 import numpy as np
 import pandas as pd
 from gensim.corpora import Dictionary, MmCorpus
 from gensim.matutils import corpus2dense, corpus2csc
 from gensim.models import TfidfModel, LsiModel
+from sklearn.metrics.pairwise import cosine_similarity
 from tqdm import tqdm
 
 from semsim import DATASET_STREAMS
@@ -38,13 +36,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('-w', '--window', type=int, required=False, default=1000)
     parser.add_argument('--min-word-freq', type=int, required=False, default=50)
     parser.add_argument('--min-contexts', type=int, required=False, default=40)
+    parser.add_argument('--keep-n', type=int, required=False, default=None)
     parser.add_argument('--nb-topics', type=int, required=False, default=300)
+    parser.add_argument('--epsilon', type=float, required=False, default=0.0,
+                        help="Add an offset to each BOW-matrix entry before taking the log.")
     parser.add_argument('--pos-tags', nargs='*', type=str, required=False)
     parser.add_argument('--normalization', type=str, required=False,
                         default='entropy', choices=['none', 'entropy', 'tfidf'],
                         help="BOW-frequency normalization method.")
     parser.add_argument('--terms', type=str, required=False,
-                        help="File path containing terms")
+                        help="File path containing the terms per line to calculate SemD values "
+                             "for.")
+    parser.add_argument('--vocab', type=str, required=False,
+                        help="File path containing terms per line to include in the "
+                             "term-document-matrix. Any other term is excluded.")
 
     parser.add_argument('--lowercase', action='store_true', required=False)
     parser.add_argument('--no-lowercase', dest='lowercase', action='store_false', required=False)
@@ -83,6 +88,8 @@ def calculate_semantic_diversity(terms, dictionary, corpus, document_vectors):
             term_id = dictionary.token2id[term]
             term_docs_sparse = csc_matrix.getrow(term_id)
             term_doc_ids = term_docs_sparse.nonzero()[1]
+            # TODO: why is one entry in the dictionary missing from the tdm?
+            # TODO: check plausibility of term_doc_ids
 
             # if target appears in >2000 documents, subsample 2000 at random
             if len(term_doc_ids) > 2000:
@@ -96,7 +103,7 @@ def calculate_semantic_diversity(terms, dictionary, corpus, document_vectors):
             semd = -np.log10(avg_similarity)
             mean_cos[term] = avg_similarity
             semd_values[term] = semd
-        except KeyError:
+        except (KeyError, ValueError, IndexError):
             semd_values[term] = np.nan
 
     semd = pd.DataFrame([mean_cos, semd_values], index=['mean_cos', 'SemD']).T
@@ -134,9 +141,11 @@ def calc_entropy(corpus, corpus_freqs):
 
     entropy = np.zeros_like(corpus_freqs, dtype=np.float32)
     for context in tqdm(corpus, total=len(corpus)):
-        context = np.asarray(context, dtype=np.int32).T
-        token_ids = context[0]
-        context_freq = context[1]
+        if not context:
+            continue
+        context_arr = np.asarray(context, dtype=np.int32).T
+        token_ids = context_arr[0]
+        context_freq = context_arr[1]
         corpus_freq = corpus_freqs[token_ids]
         p_c = context_freq / corpus_freq
         ic = -np.log(p_c)
@@ -146,13 +155,15 @@ def calc_entropy(corpus, corpus_freqs):
     return entropy
 
 
-def calc_entropy_normalization(corpus, word_entropies, epsilon):
+def calc_entropy_normalization(corpus, word_entropies, epsilon=0.0):
     print('Normalizing corpus.')
 
     word_entropies = word_entropies.astype(np.float32)
     epsilon = np.float32(epsilon)
     transformed_corpus = []
     for context in tqdm(corpus, total=len(corpus)):
+        if not context:
+            continue
         context_arr = np.asarray(context, dtype=np.float32).T
         token_ids = context_arr[0].astype(np.int32)
         context_freq = context_arr[1]
@@ -164,7 +175,7 @@ def calc_entropy_normalization(corpus, word_entropies, epsilon):
     return transformed_corpus
 
 
-def entropy_transform(corpus, dictionary, epsilon=1.0, use_cache=True):
+def entropy_transform(corpus, dictionary, epsilon=0.0, use_cache=True):
 
     # TODO: individualize file name based on args
     file_name = 'entropy_transform.csv'
@@ -208,7 +219,8 @@ def tfidf_transform(bow_corpus):
 
 
 def texts2corpus(
-        contexts, stopwords=None, min_word_freq=1, min_contexts=1, filter_above=1, keep_n=1_000_000
+        contexts, stopwords=None, vocab=None, min_word_freq=1, min_contexts=1, filter_above=1,
+        keep_n=None
 ):
     print(f"Generating dictionary.")
 
@@ -222,16 +234,30 @@ def texts2corpus(
     )
     vocab_size = len(dictionary)
 
+    # apply allowlist by a predefined vocabulary
+    if vocab:
+        with open(vocab, 'r') as fp:
+            print(f'Loading vocab file {vocab}')
+            vocab_ = {line.strip() for line in fp.readlines()}
+            print(f'{len(vocab_)} terms loaded.')
+
+        good_ids = [
+            dictionary.token2id[token] for token in vocab_ if token in dictionary.token2id
+        ]
+        dictionary.filter_tokens(good_ids=good_ids)
+        print(f"Removing {vocab_size - len(dictionary)} tokens not in predefined vocab.")
+        vocab_size = len(dictionary)
+
     # filter noise (e.g. stopwords, special characters, infrequent words)
     if stopwords:
         bad_ids = [dictionary.token2id[token] for token in stopwords]
-        dictionary.filter_tokens(bad_ids=bad_ids, good_ids=None)
+        dictionary.filter_tokens(bad_ids=bad_ids)
         print(f"Removing {len(dictionary) - vocab_size} stopword tokens.")
         vocab_size = len(dictionary)
 
     if min_word_freq > 1:
         bad_ids = [k for k, v in dictionary.cfs.items() if v < min_word_freq]
-        dictionary.filter_tokens(bad_ids=bad_ids, good_ids=None)
+        dictionary.filter_tokens(bad_ids=bad_ids)
         print(
             f"Removing {vocab_size - len(dictionary)} tokens with min frequency < {min_word_freq}."
         )
@@ -243,19 +269,6 @@ def texts2corpus(
     bow_corpus = [dictionary.doc2bow(text) for text in contexts]
 
     return bow_corpus, dictionary
-
-
-# TODO: deprecated
-def chunks_from_documents(documents: Iterable, window_size: int) -> List:
-    contexts = []
-    for document in documents:
-        if len(document) > window_size:
-            chunks = [document[x:x+window_size] for x in range(0, len(document), window_size)]
-            contexts += chunks
-        else:
-            contexts.append(document)
-
-    return contexts
 
 
 def get_contexts(args):
@@ -272,7 +285,7 @@ def get_contexts(args):
     return contexts
 
 
-def normalize(bow_corpus, dictionary, normalization, directory, file_name):
+def normalize(bow_corpus, dictionary, normalization, directory, file_name, epsilon=0.0):
     if normalization == 'tfidf':
         # - tfidf transform corpus -
         tfidf_corpus = tfidf_transform(bow_corpus)
@@ -284,7 +297,7 @@ def normalize(bow_corpus, dictionary, normalization, directory, file_name):
         corpus = tfidf_corpus
     elif normalization == 'entropy':
         # - log transform and entropy-normalize corpus -
-        entropy_corpus = entropy_transform(bow_corpus, dictionary)
+        entropy_corpus = entropy_transform(bow_corpus, dictionary, epsilon)
 
         # - save entropy-normalized corpus -
         file_path = directory / f'{file_name}_entropy.mm'
@@ -300,7 +313,8 @@ def normalize(bow_corpus, dictionary, normalization, directory, file_name):
 def make_corpus(args, directory, file_name):
     contexts = get_contexts(args)
     bow_corpus, dictionary = texts2corpus(
-        contexts, min_word_freq=args.min_word_freq, min_contexts=args.min_contexts, stopwords=None
+        contexts, stopwords=None, vocab=args.vocab,
+        min_word_freq=args.min_word_freq, min_contexts=args.min_contexts, keep_n=args.keep_n
     )
 
     # - save dictionary -
@@ -323,7 +337,10 @@ def make_corpus(args, directory, file_name):
     file_path = directory / f'{file_name}_bow.mm'
     print(f"Saving {file_path}")
     MmCorpus.serialize(str(file_path), bow_corpus)
-    corpus = normalize(bow_corpus, dictionary, args.normalization, directory, file_name)
+    corpus = normalize(
+        bow_corpus, dictionary, args.normalization, directory, file_name,
+        epsilon=args.epsilon
+    )
 
     return corpus, dictionary
 
@@ -358,7 +375,10 @@ def load_corpus(args, directory, file_name):
     except FileNotFoundError as e:
         print(e)
         bow_corpus = load_bow_corpus(directory, file_name)
-        corpus = normalize(bow_corpus, dictionary, args.normalization, directory, file_name)
+        corpus = normalize(
+            bow_corpus, dictionary, args.normalization, directory, file_name,
+            epsilon=args.epsilon
+        )
 
     return corpus, dictionary
 
