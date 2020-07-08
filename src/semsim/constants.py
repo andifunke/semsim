@@ -2,6 +2,7 @@
 This module defines global constants for the SemSim package.
 """
 
+import os
 from pathlib import Path
 
 
@@ -18,5 +19,4 @@ SEMD_DIR = OUT_DIR / 'SemD'
 CORPORA_DIR = DATA_DIR / 'corpora'
 
 # --- typing macros ---
-PathLike = Union[Path, str]
-
+PathLike = Union[Path, str, os.PathLike]

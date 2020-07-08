@@ -47,7 +47,7 @@ def parse_args() -> argparse.Namespace:
                         help="File path containing terms")
 
     parser.add_argument('--lowercase', action='store_true', required=False)
-    parser.add_argument('--no-lowercase', dest='lowercase', action='store_true', required=False)
+    parser.add_argument('--no-lowercase', dest='lowercase', action='store_false', required=False)
     parser.set_defaults(lowercase=True)
 
     parser.add_argument('--make-corpus', dest='make_corpus', action='store_true', required=False)
@@ -265,7 +265,7 @@ def get_contexts(args):
         tagged=False,
         lowercase=args.lowercase,
         # tags_allowlist=args.pos_tags,  # TODO: implement
-        tags_blocklist=['PUL', 'PUN', 'PUQ'],  # TODO: add to args
+        tags_blocklist=[],  # TODO: add to args
         make_if_not_cached=True,
         persist_if_not_cached=True,
     )

@@ -1,6 +1,6 @@
+import argparse
 import json
 import math
-from pathlib import Path
 from typing import Generator, List, Union, Tuple
 
 from nltk.corpus.reader.bnc import BNCCorpusReader
@@ -17,7 +17,33 @@ TAGS = {
     'INTERJ', 'PUL'
 }
 
-# TODO: add command line arguments
+
+def parse_args() -> argparse.Namespace:
+    """
+    Parses module-specific arguments. Solves argument dependencies and
+    returns cleaned up arguments.
+
+    :returns: arguments object
+    """
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('-w', '--window', type=int, required=False, default=1000)
+    parser.add_argument('-d', '--directory', type=str, required=False)
+    parser.add_argument('--tags-blocklist', nargs='*', type=str, required=False, default=[],
+                        choices=TAGS)
+
+    parser.add_argument('--lowercase', action='store_true', required=False)
+    parser.add_argument('--no-lowercase', dest='lowercase', action='store_false', required=False)
+    parser.set_defaults(lowercase=True)
+
+    parser.add_argument('--tagged', action='store_true', required=False)
+    parser.add_argument('--no-tagged', dest='tagged', action='store_false', required=False)
+    parser.set_defaults(tagged=False)
+
+    args = parser.parse_args()
+
+    return args
 
 
 def stream_bnc(
@@ -89,16 +115,16 @@ def infer_file_path(
         tagged: bool = False,
         lowercase: bool = False,
         tags_blocklist: list = None
-) -> Path:
+) -> PathLike:
     """Returns a canonical file path for the given corpus and arguments."""
 
     corpus_name = BNC_CORPUS_ID
     cs_suffix = f'_cs{chunk_size}' if isinstance(chunk_size, int) and chunk_size > 0 else ''
     tagged_suffix = '_tagged' if tagged else ''
     lowercase_suffix = '_lc' if lowercase else ''
-    filtered_suffix = '_filtered' if tags_blocklist is not None else ''
+    filtered_suffix = '_filtered' if tags_blocklist else ''
     file_name = f'{corpus_name}{cs_suffix}{tagged_suffix}{lowercase_suffix}{filtered_suffix}.txt'
-    file_path = CACHE_DIR / file_name
+    file_path = CACHE_DIR / 'corpora' / BNC_CORPUS_ID / file_name
 
     return file_path
 
@@ -219,32 +245,36 @@ def load_from_cache(
     return docs
 
 
-def example(exmple='read'):
-    if exmple == 'stream':
+def example(args, example_='read'):
+    if example_ == 'stream':
         docs = stream_bnc(
-            chunk_size=1000,
-            tagged=True,
-            lowercase=True,
-            tags_blocklist=['PUL', 'PUN', 'PUQ']
+            chunk_size=args.window,
+            tagged=args.tagged,
+            lowercase=args.lowercase,
+            tags_blocklist=args.tags_blocklist,
+            directory=args.directory,
         )
         for doc in docs:
             print(len(doc), doc[:50])
-    elif exmple == 'write':
+    elif example_ == 'write':
         persist_transformation(
-            chunk_size=1000,
-            tagged=False,
-            lowercase=True,
-            tags_blocklist=['PUL', 'PUN', 'PUQ']
+            chunk_size=args.window,
+            tagged=args.tagged,
+            lowercase=args.lowercase,
+            tags_blocklist=args.tags_blocklist,
+            directory=args.directory,
         )
-    elif exmple == 'load':
+    elif example_ == 'load':
         docs = load_from_cache(
-            chunk_size=1000,
-            tagged=False,
-            lowercase=True,
-            tags_blocklist=['PUL', 'PUN', 'PUQ']
+            chunk_size=args.window,
+            tagged=args.tagged,
+            lowercase=args.lowercase,
+            tags_blocklist=args.tags_blocklist,
         )
         print(docs[:10])
 
 
 if __name__ == '__main__':
-    example('load')
+    args_ = parse_args()
+    print(vars(args_))
+    example(args_, 'write')
