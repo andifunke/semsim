@@ -29,6 +29,8 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
 
     parser.add_argument('-w', '--window', type=int, required=False, default=1000)
+    parser.add_argument('-m', '--min-doc-size', type=int, required=False, default=1,
+                        help="Discard all documents/chunk smaller than --min-doc-size.")
     parser.add_argument('-d', '--directory', type=str, required=False)
     parser.add_argument('--tags-blocklist', nargs='*', type=str, required=False, default=[],
                         choices=TAGS)
@@ -48,6 +50,7 @@ def parse_args() -> argparse.Namespace:
 
 def stream_bnc(
         chunk_size: int = None,
+        min_doc_size: int = None,
         tagged: bool = False,
         lowercase: bool = False,
         tags_blocklist: list = None,
@@ -57,6 +60,7 @@ def stream_bnc(
     Parses documents from the original BNC XML corpus and streams as list of strings or tuples.
 
     :param chunk_size: Splits the documents in contexts of a maximum window size.
+    :param min_doc_size: Discard all documents/contexts smaller than min_chunk_size.
     :param tagged: if False: items of the yielded lists are string tokens.
                    if True: items of the yielded lists are tuples in the format
                    ``(token, pos_tag)``.
@@ -88,6 +92,11 @@ def stream_bnc(
     else:
         map_lc = lambda x: x
 
+    if not isinstance(chunk_size, int):
+        chunk_size = 0
+    if not isinstance(min_doc_size, int):
+        min_doc_size = 0
+
     fileids = bnc.fileids()
     for fileid in tqdm(fileids, total=len(fileids)):
         read_id = read_fn(fileids=fileid, strip_space=True)
@@ -97,13 +106,17 @@ def stream_bnc(
         doc = list(mapped_lc)
 
         # --- apply chunk_size
-        if isinstance(chunk_size, int) and len(doc) > chunk_size:
+        if chunk_size and len(doc) > chunk_size:
             nb_chunks = int(math.ceil(len(doc) / chunk_size))
             for i in range(nb_chunks):
                 chunk = doc[i*chunk_size:(i+1)*chunk_size]
-                yield chunk
+                if len(chunk) > chunk_size:
+                    print('len(chunk)', len(chunk))
+                if len(chunk) >= min_doc_size:
+                    yield chunk
         else:
-            yield doc
+            if len(doc) >= min_doc_size:
+                yield doc
 
 
 def read_bnc(*args, **kwargs):
@@ -112,6 +125,7 @@ def read_bnc(*args, **kwargs):
 
 def infer_file_path(
         chunk_size: int = None,
+        min_doc_size: int = None,
         tagged: bool = False,
         lowercase: bool = False,
         tags_blocklist: list = None
@@ -123,7 +137,18 @@ def infer_file_path(
     tagged_suffix = '_tagged' if tagged else ''
     lowercase_suffix = '_lc' if lowercase else ''
     filtered_suffix = '_filtered' if tags_blocklist else ''
-    file_name = f'{corpus_name}{cs_suffix}{tagged_suffix}{lowercase_suffix}{filtered_suffix}.txt'
+    min_doc_size_suffix = (
+        f'_minsz{min_doc_size}' if isinstance(min_doc_size, int) and min_doc_size > 0 else ''
+    )
+    file_name = (
+        f'{corpus_name}'
+        f'{cs_suffix}'
+        f'{min_doc_size_suffix}'
+        f'{tagged_suffix}'
+        f'{lowercase_suffix}'
+        f'{filtered_suffix}'
+        f'.txt'
+    )
     file_path = CACHE_DIR / 'corpora' / BNC_CORPUS_ID / file_name
 
     return file_path
@@ -131,6 +156,7 @@ def infer_file_path(
 
 def persist_transformation(
         chunk_size: int = None,
+        min_doc_size: int = None,
         tagged: bool = False,
         lowercase: bool = False,
         tags_blocklist: list = None,
@@ -143,6 +169,7 @@ def persist_transformation(
     The file is written to ``data/out/cache/bnc[args].txt``.
 
     :param chunk_size: Splits the documents in contexts of a maximum window size.
+    :param min_doc_size: Discard all documents/contexts smaller than min_chunk_size.
     :param tagged:
         if False: items of the yielded lists are string tokens.
         if True: items of the yielded lists are tuples in the format ``(token, pos_tag)``.
@@ -155,6 +182,7 @@ def persist_transformation(
 
     out_path = infer_file_path(
         chunk_size=chunk_size,
+        min_doc_size=min_doc_size,
         tagged=tagged,
         lowercase=lowercase,
         tags_blocklist=tags_blocklist,
@@ -162,6 +190,7 @@ def persist_transformation(
     if documents is None:
         documents = stream_bnc(
             chunk_size=chunk_size,
+            min_doc_size=min_doc_size,
             tagged=tagged,
             lowercase=lowercase,
             tags_blocklist=tags_blocklist,
@@ -182,6 +211,7 @@ def persist_transformation(
         args = dict(
             directory=directory,
             chunk_size=chunk_size,
+            min_doc_size=min_doc_size,
             tagged=tagged,
             lowercase=lowercase,
             tags_blocklist=tags_blocklist,
@@ -191,6 +221,7 @@ def persist_transformation(
 
 def load_from_cache(
         chunk_size: int = None,
+        min_doc_size: int = None,
         tagged: bool = False,
         lowercase: bool = False,
         tags_blocklist: list = None,
@@ -200,6 +231,7 @@ def load_from_cache(
     """
 
     :param chunk_size:
+    :param min_doc_size:
     :param tagged:
     :param lowercase:
     :param tags_blocklist:
@@ -213,6 +245,7 @@ def load_from_cache(
 
     out_path = infer_file_path(
         chunk_size=chunk_size,
+        min_doc_size=min_doc_size,
         tagged=tagged,
         lowercase=lowercase,
         tags_blocklist=tags_blocklist,
@@ -222,12 +255,13 @@ def load_from_cache(
     try:
         with open(out_path, 'r') as fp:
             print(f"Loading {out_path}")
-            docs = [c.split() for c in fp.readlines()]
+            docs = [c.strip().split() for c in fp.readlines()]
     except FileNotFoundError:
         make_if_not_cached |= persist_if_not_cached
         if make_if_not_cached:
             docs = read_bnc(
                 chunk_size=chunk_size,
+                min_doc_size=min_doc_size,
                 tagged=tagged,
                 lowercase=lowercase,
                 tags_blocklist=tags_blocklist,
@@ -236,6 +270,7 @@ def load_from_cache(
                 persist_transformation(
                     documents=docs,
                     chunk_size=chunk_size,
+                    min_doc_size=min_doc_size,
                     tagged=tagged,
                     lowercase=lowercase,
                     tags_blocklist=tags_blocklist
@@ -250,6 +285,7 @@ def example(args, example_='read'):
     if example_ == 'stream':
         docs = stream_bnc(
             chunk_size=args.window,
+            min_doc_size=args.min_doc_size,
             tagged=args.tagged,
             lowercase=args.lowercase,
             tags_blocklist=args.tags_blocklist,
@@ -260,6 +296,7 @@ def example(args, example_='read'):
     elif example_ == 'write':
         persist_transformation(
             chunk_size=args.window,
+            min_doc_size=args.min_doc_size,
             tagged=args.tagged,
             lowercase=args.lowercase,
             tags_blocklist=args.tags_blocklist,
@@ -268,6 +305,7 @@ def example(args, example_='read'):
     elif example_ == 'load':
         docs = load_from_cache(
             chunk_size=args.window,
+            min_doc_size=args.min_doc_size,
             tagged=args.tagged,
             lowercase=args.lowercase,
             tags_blocklist=args.tags_blocklist,
