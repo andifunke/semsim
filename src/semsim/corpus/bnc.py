@@ -70,8 +70,7 @@ def stream_bnc(
 
     :returns: Generator that yields documents/contexts as lists of tokens.
     """
-    # TODO: There is probably room for performance improvements.
-    # TODO: A structured data format might be desirable.
+    # TODO: Benchmark structured data formats for strings/documents/tokens
 
     directory = BNC_DIR if directory is None else directory
     bnc = BNCCorpusReader(root=str(directory), fileids=r'[A-K]/\w*/\w*\.xml')
@@ -106,12 +105,11 @@ def stream_bnc(
         doc = list(mapped_lc)
 
         # --- apply chunk_size
-        if chunk_size and len(doc) > chunk_size:
-            nb_chunks = int(math.ceil(len(doc) / chunk_size))
-            for i in range(nb_chunks):
-                chunk = doc[i*chunk_size:(i+1)*chunk_size]
-                if len(chunk) > chunk_size:
-                    print('len(chunk)', len(chunk))
+        if chunk_size:
+            idx = 0
+            while idx < len(doc):
+                chunk = doc[idx:idx+chunk_size]
+                idx += chunk_size
                 if len(chunk) >= min_doc_size:
                     yield chunk
         else:
