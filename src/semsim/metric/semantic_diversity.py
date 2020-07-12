@@ -10,12 +10,14 @@ import pandas as pd
 from gensim.corpora import Dictionary, MmCorpus
 from gensim.matutils import corpus2dense, corpus2csc
 from gensim.models import TfidfModel, LsiModel
+from sklearn.decomposition import TruncatedSVD
 from sklearn.metrics.pairwise import cosine_similarity
 from tqdm import tqdm
 
 from semsim import DATASET_STREAMS
-from semsim.constants import SEMD_DIR, CACHE_DIR
+from semsim.constants import SEMD_DIR
 from semsim.corpus.dataio import reader
+from semsim.corpus.bnc import infer_file_path
 
 tqdm.pandas()
 np.random.seed(42)
@@ -32,8 +34,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
 
     parser.add_argument('-c', '--corpus', type=str, required=True, choices=DATASET_STREAMS.keys())
-    parser.add_argument('-v', '--version', type=str, required=False, default='default')
+    parser.add_argument('-v', '--version', type=str, required=False, default=None)
+    parser.add_argument('-p', '--project', type=str, required=False, default='')
     parser.add_argument('-w', '--window', type=int, required=False, default=1000)
+    parser.add_argument('-m', '--min-doc-size', type=int, required=False, default=1,
+                        help="Discard all documents/chunk smaller than --min-doc-size.")
     parser.add_argument('--min-word-freq', type=int, required=False, default=50)
     parser.add_argument('--min-contexts', type=int, required=False, default=40)
     parser.add_argument('--keep-n', type=int, required=False, default=None)
@@ -71,6 +76,19 @@ def parse_args() -> argparse.Namespace:
     if args.make_corpus:
         args.make_lsi = True
 
+    if args.project and not args.version:
+        args.version = args.project
+
+    if not args.version:
+        args.version = infer_file_path(
+            chunk_size=args.window,
+            min_doc_size=args.min_doc_size,
+            tagged=False,
+            lowercase=args.lowercase,
+            tags_blocklist=[],
+            with_suffix=False,
+        )
+
     args.input_fn = DATASET_STREAMS[args.corpus]
 
     return args
@@ -80,6 +98,8 @@ def calculate_semantic_diversity(terms, dictionary, corpus, document_vectors):
     print('Calculate Semantic Diversity.')
 
     csc_matrix = corpus2csc(corpus, dtype=np.float32)
+    assert csc_matrix.shape[0] == len(dictionary)
+    assert csc_matrix.shape[1] == len(corpus)
 
     mean_cos = {}
     semd_values = {}
@@ -111,8 +131,8 @@ def calculate_semantic_diversity(terms, dictionary, corpus, document_vectors):
     return semd
 
 
-def lsi_transform(corpus, dictionary, nb_topics=300, cache_in_memory=False):
-    if cache_in_memory:
+def lsi_projection(corpus, dictionary, nb_topics=300, cache_in_memory=False):
+    if cache_in_memory and not isinstance(corpus, list):
         print("Loading corpus into memory")
         corpus = list(corpus)
     print(f"Size of train_set={len(corpus)}")
@@ -132,6 +152,27 @@ def lsi_transform(corpus, dictionary, nb_topics=300, cache_in_memory=False):
     return model, document_vectors, term_vectors
 
 
+def lsi_projection_sklearn(corpus, nb_topics=300):
+    csc_matrix = corpus2csc(corpus, dtype=np.float32).T
+    print(f"Size of train_set={csc_matrix.shape[0]}")
+
+    # --- train ---
+    print(f"Training LSI model with {nb_topics} topics")
+    svd = TruncatedSVD(n_components=nb_topics)
+    svdMatrix = svd.fit_transform(csc_matrix)
+
+    # --- get vectors ---
+    # term_vectors = svd.projection.u
+    # term_vectors = pd.DataFrame(term_vectors, index=dictionary.token2id.keys())
+
+    term_vectors = None
+    document_vectors = svdMatrix
+    # document_vectors = corpus2dense(lsi_corpus, 300, num_docs=len(corpus)).T
+    document_vectors = pd.DataFrame(document_vectors)
+
+    return svd, document_vectors, term_vectors
+
+
 def docs_to_lists(token_series):
     return token_series.tolist()
 
@@ -144,13 +185,13 @@ def calc_entropy(corpus, corpus_freqs):
         if not context:
             continue
         context_arr = np.asarray(context, dtype=np.int32).T
-        token_ids = context_arr[0]
+        term_ids = context_arr[0]
         context_freq = context_arr[1]
-        corpus_freq = corpus_freqs[token_ids]
+        corpus_freq = corpus_freqs[term_ids]
         p_c = context_freq / corpus_freq
-        ic = -np.log(p_c)
+        ic = -np.log10(p_c)
         ctx_ent = p_c * ic
-        entropy[token_ids] += ctx_ent
+        entropy[term_ids] += ctx_ent
 
     return entropy
 
@@ -163,34 +204,34 @@ def calc_entropy_normalization(corpus, word_entropies, epsilon=0.0):
     transformed_corpus = []
     for context in tqdm(corpus, total=len(corpus)):
         if not context:
-            continue
-        context_arr = np.asarray(context, dtype=np.float32).T
-        token_ids = context_arr[0].astype(np.int32)
-        context_freq = context_arr[1]
-        context_entropy = word_entropies[token_ids]
-        transformations = (np.log(context_freq) + epsilon) / context_entropy
-        transformed_context = [x for x in zip(token_ids, transformations)]
-        transformed_corpus.append(transformed_context)
+            transformed_corpus.append([])
+        else:
+            context_arr = np.asarray(context, dtype=np.float32).T
+            term_ids = context_arr[0].astype(np.int32)
+            context_freq = context_arr[1]
+            context_entropy = word_entropies[term_ids]
+            transformations = (np.log(context_freq) + epsilon) / context_entropy
+            transformed_context = [x for x in zip(term_ids, transformations)]
+            transformed_corpus.append(transformed_context)
 
     return transformed_corpus
 
 
-def entropy_transform(corpus, dictionary, epsilon=0.0, use_cache=True):
+def entropy_transform(corpus, dictionary, directory, epsilon=0.0, use_cache=True):
 
     # TODO: individualize file name based on args
     file_name = 'entropy_transform.csv'
-    dir_path = CACHE_DIR / 'SemD'
-    dir_path.mkdir(exist_ok=True, parents=True)
-    file_path = dir_path / file_name
+    file_path = directory / file_name
 
     df = None
     if use_cache:
         try:
             df = pd.read_csv(file_path, sep='\t')
+            print(f'Read from cache {file_path}.')
         except FileNotFoundError:
             print(f'Could not read cache from {file_path}')
 
-    # calculate "entropy" per token
+    # calculate "entropy" per term
     if df is None:
         dfs = pd.Series(dictionary.dfs, name='context_freq', dtype='int32').sort_index()
         cfs = pd.Series(dictionary.cfs, name='corpus_freq', dtype='int32').sort_index()
@@ -199,9 +240,9 @@ def entropy_transform(corpus, dictionary, epsilon=0.0, use_cache=True):
         df['freq'] = (df.corpus_freq / wordcount_per_mil).astype('float32')
         df['log_freq'] = np.log10(df.freq.values + epsilon, dtype='float32')
         df['entropy'] = calc_entropy(corpus, corpus_freqs=df.corpus_freq.values)
-        df['token_id'] = df.index
-        df['token'] = df.token_id.map(lambda x: dictionary[x])
-        df = df.set_index('token')
+        df['term_id'] = df.index
+        df['term'] = df.term_id.map(lambda x: dictionary[x])
+        df = df.set_index('term')
         df.to_csv(file_path, sep='\t')
 
     # calculate transformation
@@ -229,7 +270,7 @@ def texts2corpus(
     vocab_size = len(dictionary)
     dictionary.filter_extremes(no_below=min_contexts, no_above=filter_above, keep_n=keep_n)
     print(
-        f"Removing {vocab_size - len(dictionary)} tokens "
+        f"Removing {vocab_size - len(dictionary)} terms "
         f"appearing in less than {min_contexts} contexts."
     )
     vocab_size = len(dictionary)
@@ -259,7 +300,7 @@ def texts2corpus(
         bad_ids = [k for k, v in dictionary.cfs.items() if v < min_word_freq]
         dictionary.filter_tokens(bad_ids=bad_ids)
         print(
-            f"Removing {vocab_size - len(dictionary)} tokens with min frequency < {min_word_freq}."
+            f"Removing {vocab_size - len(dictionary)} terms with min frequency < {min_word_freq}."
         )
 
     dictionary.compactify()
@@ -275,6 +316,7 @@ def get_contexts(args):
     read_fn = reader(args.corpus)
     contexts = read_fn(
         chunk_size=args.window,
+        min_doc_size=args.min_doc_size,
         tagged=False,
         lowercase=args.lowercase,
         # tags_allowlist=args.pos_tags,  # TODO: implement
@@ -297,7 +339,8 @@ def normalize(bow_corpus, dictionary, normalization, directory, file_name, epsil
         corpus = tfidf_corpus
     elif normalization == 'entropy':
         # - log transform and entropy-normalize corpus -
-        entropy_corpus = entropy_transform(bow_corpus, dictionary, epsilon)
+        entropy_corpus = entropy_transform(bow_corpus, dictionary, directory, epsilon)
+        assert len(entropy_corpus) == len(bow_corpus)
 
         # - save entropy-normalized corpus -
         file_path = directory / f'{file_name}_entropy.mm'
@@ -316,6 +359,7 @@ def make_corpus(args, directory, file_name):
         contexts, stopwords=None, vocab=args.vocab,
         min_word_freq=args.min_word_freq, min_contexts=args.min_contexts, keep_n=args.keep_n
     )
+    assert len(contexts) == len(bow_corpus)
 
     # - save dictionary -
     file_path = directory / f'{file_name}.dict'
@@ -326,7 +370,7 @@ def make_corpus(args, directory, file_name):
     dict_table = pd.Series(dictionary.token2id).to_frame(name='idx')
     dict_table['freq'] = dict_table['idx'].map(dictionary.cfs.get)
     dict_table = dict_table.reset_index()
-    dict_table = dict_table.set_index('idx', drop=True).rename({'index': 'token'}, axis=1)
+    dict_table = dict_table.set_index('idx', drop=True).rename({'index': 'term'}, axis=1)
     dict_table = dict_table.sort_index()
     file_path = directory / f'{file_name}_dict.csv'
     print(f"Saving {file_path}")
@@ -397,25 +441,38 @@ def get_sparse_corpus(args, directory, file_name):
 
 
 def make_lsi(corpus, dictionary, args, directory, file_name):
-    model, document_vectors, term_vectors = lsi_transform(
-        corpus=corpus, dictionary=dictionary, nb_topics=args.nb_topics,
-        cache_in_memory=True
-    )
+    if 'sklearn':  # TODO: parameterize
+        model, document_vectors, term_vectors = lsi_projection_sklearn(
+            corpus=corpus, nb_topics=args.nb_topics
+        )
+        assert len(document_vectors) == len(corpus)
 
-    # --- save model ---
-    file_path = directory / f'{file_name}_lsi.model'
-    print(f"Saving model to {file_path}")
-    model.save(str(file_path))
+        # --- save document vectors ---
+        file_path = directory / f'{file_name}_lsi_sklearn_document_vectors.csv'
+        print(f"Saving document vectors to {file_path}")
+        document_vectors.to_csv(file_path)
+    else:
+        model, document_vectors, term_vectors = lsi_projection(
+            corpus=corpus, dictionary=dictionary, nb_topics=args.nb_topics,
+            cache_in_memory=True
+        )
+        assert len(document_vectors) == len(corpus)
+        assert len(term_vectors) == len(dictionary)
 
-    # --- save document vectors ---
-    file_path = directory / f'{file_name}_lsi_document_vectors.csv'
-    print(f"Saving document vectors to {file_path}")
-    document_vectors.to_csv(file_path)
+        # --- save model ---
+        file_path = directory / f'{file_name}_lsi.model'
+        print(f"Saving model to {file_path}")
+        model.save(str(file_path))
 
-    # --- save term vectors ---
-    file_path = directory / f'{file_name}_lsi_term_vectors.csv'
-    print(f"Saving document vectors to {file_path}")
-    term_vectors.to_csv(file_path)
+        # --- save document vectors ---
+        file_path = directory / f'{file_name}_lsi_document_vectors.csv'
+        print(f"Saving document vectors to {file_path}")
+        document_vectors.to_csv(file_path)
+
+        # --- save term vectors ---
+        file_path = directory / f'{file_name}_lsi_term_vectors.csv'
+        print(f"Saving term vectors to {file_path}")
+        term_vectors.to_csv(file_path)
 
     return document_vectors
 
@@ -446,7 +503,7 @@ def main():
     args = parse_args()
     print(args)
 
-    file_name = f'{args.corpus}_{args.version}'
+    file_name = f'{args.corpus}'
     directory = SEMD_DIR / args.version
     directory.mkdir(exist_ok=True, parents=True)
 
@@ -463,7 +520,8 @@ def main():
         file_path = terms_path.with_suffix('.semd')
     else:
         terms = dictionary.token2id.keys()
-        file_path = directory / f'{file_name}.semd'
+        project_suffix = f'_{args.project}' if args.project else ''
+        file_path = directory / f'{file_name}{project_suffix}.semd'
     semd_values = calculate_semantic_diversity(terms, dictionary, corpus, lsi_vectors.values)
 
     # - save SemD values for vocabulary -

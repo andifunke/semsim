@@ -73,6 +73,7 @@ def stream_bnc(
     # TODO: Benchmark structured data formats for strings/documents/tokens
 
     directory = BNC_DIR if directory is None else directory
+    print(f'Streaming BNC corpus from {directory}')
     bnc = BNCCorpusReader(root=str(directory), fileids=r'[A-K]/\w*/\w*\.xml')
 
     read_fn = bnc.tagged_words if tagged else bnc.words
@@ -126,7 +127,8 @@ def infer_file_path(
         min_doc_size: int = None,
         tagged: bool = False,
         lowercase: bool = False,
-        tags_blocklist: list = None
+        tags_blocklist: list = None,
+        with_suffix=True,
 ) -> PathLike:
     """Returns a canonical file path for the given corpus and arguments."""
 
@@ -138,6 +140,7 @@ def infer_file_path(
     min_doc_size_suffix = (
         f'_minsz{min_doc_size}' if isinstance(min_doc_size, int) and min_doc_size > 0 else ''
     )
+    file_suffix = '.txt' if with_suffix else ''
     file_name = (
         f'{corpus_name}'
         f'{cs_suffix}'
@@ -145,7 +148,7 @@ def infer_file_path(
         f'{tagged_suffix}'
         f'{lowercase_suffix}'
         f'{filtered_suffix}'
-        f'.txt'
+        f'{file_suffix}'
     )
     file_path = CACHE_DIR / 'corpora' / BNC_CORPUS_ID / file_name
 

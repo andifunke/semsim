@@ -1,5 +1,9 @@
 # SemSim
 
+**This project is still in early alpha stage.**
+
+...
+
 SemSim is intended to be a Python package for applying and 
 evaluating metrics of semantic similarity and semantic relatedness measures
 on word-pairs or sets of words such as the representation terms derived from
@@ -19,4 +23,3 @@ conda activate semsim
 pip install -r requirements.txt
 python setup.py develop
 ```
-
