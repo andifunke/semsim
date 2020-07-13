@@ -55,6 +55,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--vocab', type=str, required=False,
                         help="File path containing terms per line to include in the "
                              "term-document-matrix. Any other term is excluded.")
+    parser.add_argument('--document-vectors', type=str, required=False,
+                        help="File path to a csv file containing document vectors.")
+    parser.add_argument('--corpus-path', type=str, required=False,
+                        help="File path containing an MatrixMarket corpus.")
+    parser.add_argument('--dictionary-path', type=str, required=False,
+                        help="File path containing an dictionary (gensim or csv).")
 
     parser.add_argument('--lowercase', action='store_true', required=False)
     parser.add_argument('--no-lowercase', dest='lowercase', action='store_false', required=False)
@@ -97,15 +103,22 @@ def parse_args() -> argparse.Namespace:
 def calculate_semantic_diversity(terms, dictionary, corpus, document_vectors):
     print('Calculate Semantic Diversity.')
 
+    if isinstance(dictionary, Dictionary):
+        dictionary = dictionary.token2id
+
     csc_matrix = corpus2csc(corpus, dtype=np.float32)
-    assert csc_matrix.shape[0] == len(dictionary)
+    if csc_matrix.shape[0] != len(dictionary):
+        print(
+            f"TDM vocabulary shape {csc_matrix.shape[0]} "
+            f"differs from vocabulary length {len(dictionary)}"
+        )
     assert csc_matrix.shape[1] == len(corpus)
 
     mean_cos = {}
     semd_values = {}
     for term in tqdm(terms, total=len(terms)):  # TODO: vectorize
         try:
-            term_id = dictionary.token2id[term]
+            term_id = dictionary[term]
             term_docs_sparse = csc_matrix.getrow(term_id)
             term_doc_ids = term_docs_sparse.nonzero()[1]
             # TODO: why is one entry in the dictionary missing from the tdm?
@@ -432,7 +445,12 @@ def get_sparse_corpus(args, directory, file_name):
         corpus, dictionary = make_corpus(args, directory, file_name)
     else:
         try:
-            corpus, dictionary = load_corpus(args, directory, file_name)
+            if args.corpus_path and args.dictionary_path:
+                corpus = MmCorpus(args.corpus_path)
+                with open(args.dictionary_path) as fp:
+                    dictionary = {line.strip(): i for i, line in enumerate(fp.readlines())}
+            else:
+                corpus, dictionary = load_corpus(args, directory, file_name)
         except FileNotFoundError as e:
             print(e)
             corpus, dictionary = make_corpus(args, directory, file_name)
@@ -491,7 +509,10 @@ def get_lsi_corpus(corpus, dictionary, args, directory, file_name):
         lsi_vectors = make_lsi(corpus, dictionary, args, directory, file_name)
     else:
         try:
-            lsi_vectors = load_lsi(directory, file_name)
+            if args.document_vectors:
+                lsi_vectors = pd.read_csv(args.document_vectors, index_col=0)
+            else:
+                lsi_vectors = load_lsi(directory, file_name)
         except FileNotFoundError as e:
             print(e)
             lsi_vectors = make_lsi(corpus, dictionary, args, directory, file_name)
@@ -519,7 +540,10 @@ def main():
             print(terms)
         file_path = terms_path.with_suffix('.semd')
     else:
-        terms = dictionary.token2id.keys()
+        try:
+            terms = dictionary.token2id.keys()
+        except AttributeError:
+            terms = dictionary.keys()
         project_suffix = f'_{args.project}' if args.project else ''
         file_path = directory / f'{file_name}{project_suffix}.semd'
     semd_values = calculate_semantic_diversity(terms, dictionary, corpus, lsi_vectors.values)
