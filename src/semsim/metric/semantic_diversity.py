@@ -133,7 +133,7 @@ def calculate_semantic_diversity(terms, dictionary, corpus, document_vectors):
             lower_tri = np.tril_indices(similarities.shape[0], k=-1)
             similarities = similarities[lower_tri]
             avg_similarity = np.mean(similarities)
-            semd = -np.log10(avg_similarity)
+            semd = -np.log10(avg_similarity) if avg_similarity > 0. else np.nan
             mean_cos[term] = avg_similarity
             semd_values[term] = semd
         except (KeyError, ValueError, IndexError):
