@@ -120,17 +120,17 @@ def calculate_semantic_diversity(terms, dictionary, corpus, document_vectors):
         try:
             term_id = dictionary[term]
             term_docs_sparse = csc_matrix.getrow(term_id)
-            term_doc_ids = term_docs_sparse.nonzero()[1]
+            current_docs = term_docs_sparse.nonzero()[1]
             # TODO: why is one entry in the dictionary missing from the tdm?
             # TODO: check plausibility of term_doc_ids
 
             # if target appears in >2000 documents, subsample 2000 at random
-            if len(term_doc_ids) > 2000:
-                term_doc_ids = np.random.choice(term_doc_ids, size=2000, replace=False)
+            if len(current_docs) > 2000:
+                current_docs = np.random.choice(current_docs, size=2000, replace=False)
 
-            term_doc_vectors = document_vectors[term_doc_ids]
+            term_doc_vectors = document_vectors[current_docs]
             similarities = cosine_similarity(term_doc_vectors)
-            lower_tri = np.tril_indices(similarities.shape[0], k=1)
+            lower_tri = np.tril_indices(similarities.shape[0], k=-1)
             similarities = similarities[lower_tri]
             avg_similarity = np.mean(similarities)
             semd = -np.log10(avg_similarity)

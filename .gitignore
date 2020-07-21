@@ -148,6 +148,7 @@ out
 Classifier*
 external
 *.bak
+tmp
 tmp/
 ClassifierBasedGermanTagger
 data
