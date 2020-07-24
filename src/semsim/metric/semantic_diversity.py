@@ -121,8 +121,10 @@ def calculate_semantic_diversity(terms, dictionary, corpus, document_vectors):
             term_id = dictionary[term]
             term_docs_sparse = csc_matrix.getrow(term_id)
             current_docs = term_docs_sparse.nonzero()[1]
-            # TODO: why is one entry in the dictionary missing from the tdm?
-            # TODO: check plausibility of term_doc_ids
+
+            # can only calculate similarity if word appears in multiple documents
+            if len(current_docs) <= 1:
+                raise ValueError
 
             # if target appears in >2000 documents, subsample 2000 at random
             if len(current_docs) > 2000:
@@ -447,8 +449,12 @@ def get_sparse_corpus(args, directory, file_name):
         try:
             if args.corpus_path and args.dictionary_path:
                 corpus = MmCorpus(args.corpus_path)
-                with open(args.dictionary_path) as fp:
-                    dictionary = {line.strip(): i for i, line in enumerate(fp.readlines())}
+                try:
+                    dictionary = Dictionary.load(str(args.dictionary_path))
+                except Exception as e:
+                    print(e)
+                    with open(args.dictionary_path) as fp:
+                        dictionary = {line.strip(): i for i, line in enumerate(fp.readlines())}
             else:
                 corpus, dictionary = load_corpus(args, directory, file_name)
         except FileNotFoundError as e:
@@ -538,7 +544,10 @@ def main():
         with open(terms_path) as fp:
             terms = [line.strip() for line in fp.readlines()]
             print(terms)
-        file_path = terms_path.with_suffix('.semd')
+        if args.project:
+            file_path = directory / f'{args.project}.semd'
+        else:
+            file_path = directory / f'{terms_path.stem}.semd'
     else:
         try:
             terms = dictionary.token2id.keys()
