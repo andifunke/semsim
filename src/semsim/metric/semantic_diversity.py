@@ -100,7 +100,7 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def calculate_semantic_diversity(terms, dictionary, corpus, document_vectors):
+def calculate_semantic_diversity(terms, dictionary, corpus, document_vectors, min_contexts=2):
     print('Calculate Semantic Diversity.')
 
     if isinstance(dictionary, Dictionary):
@@ -123,7 +123,7 @@ def calculate_semantic_diversity(terms, dictionary, corpus, document_vectors):
             current_docs = term_docs_sparse.nonzero()[1]
 
             # can only calculate similarity if word appears in multiple documents
-            if len(current_docs) <= 1:
+            if len(current_docs) < max(2, min_contexts):
                 raise ValueError
 
             # if target appears in >2000 documents, subsample 2000 at random
