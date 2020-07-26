@@ -228,6 +228,7 @@ def load_from_cache(
         tags_blocklist: list = None,
         make_if_not_cached: bool = True,
         persist_if_not_cached: bool = True,
+        version: str = None,
 ) -> List[List]:
     """
 
@@ -240,17 +241,21 @@ def load_from_cache(
         if loading from cache fails.
     :param persist_if_not_cached: Implies ``make_make_if_not_cached``. Writes the new
         transformation to a plain text file.
+    :param version: an optional version id where the version id corresponds to a
+        cached corpora file.
 
     :return: List of lists of tokens.
     """
 
-    out_path = infer_file_path(
-        chunk_size=chunk_size,
-        min_doc_size=min_doc_size,
-        tagged=tagged,
-        lowercase=lowercase,
-        tags_blocklist=tags_blocklist,
-    )
+    out_path = CACHE_DIR / 'corpora' / BNC_CORPUS_ID / f'{version}.txt'
+    if not out_path.exists():
+        out_path = infer_file_path(
+            chunk_size=chunk_size,
+            min_doc_size=min_doc_size,
+            tagged=tagged,
+            lowercase=lowercase,
+            tags_blocklist=tags_blocklist,
+        )
     # TODO: read meta data first and verify identity of tags_blocklist
 
     try:

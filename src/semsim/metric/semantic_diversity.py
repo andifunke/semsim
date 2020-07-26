@@ -9,7 +9,7 @@ import numpy as np
 import pandas as pd
 from gensim.corpora import Dictionary, MmCorpus
 from gensim.matutils import corpus2dense, corpus2csc
-from gensim.models import TfidfModel, LsiModel
+from gensim.models import TfidfModel, LsiModel, LogEntropyModel
 from sklearn.decomposition import TruncatedSVD
 from sklearn.metrics.pairwise import cosine_similarity
 from tqdm import tqdm
@@ -17,7 +17,6 @@ from tqdm import tqdm
 from semsim import DATASET_STREAMS
 from semsim.constants import SEMD_DIR
 from semsim.corpus.dataio import reader
-from semsim.corpus.bnc import infer_file_path
 
 tqdm.pandas()
 np.random.seed(42)
@@ -34,7 +33,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
 
     parser.add_argument('-c', '--corpus', type=str, required=True, choices=DATASET_STREAMS.keys())
-    parser.add_argument('-v', '--version', type=str, required=False, default=None)
+    parser.add_argument('-v', '--version', type=str, required=False, default=None,
+                        help="Specify a corpus version. A corpus version points to a cached "
+                             "corpus file containing. The corpus version may contain special"
+                             "pre-processing like pos-filtering. Without specifying a corpus"
+                             "version the cached corpus file will be inferred from other"
+                             "CLI arguments if possible.")
     parser.add_argument('-p', '--project', type=str, required=False, default='')
     parser.add_argument('-w', '--window', type=int, required=False, default=1000)
     parser.add_argument('-m', '--min-doc-size', type=int, required=False, default=1,
@@ -46,8 +50,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--epsilon', type=float, required=False, default=0.0,
                         help="Add an offset to each BOW-matrix entry before taking the log.")
     parser.add_argument('--pos-tags', nargs='*', type=str, required=False)
-    parser.add_argument('--normalization', type=str, required=False,
-                        default='entropy', choices=['none', 'entropy', 'tfidf'],
+    parser.add_argument('--normalization', type=str, required=False, default='log-entropy-norm',
+                        choices=['none', 'entropy', 'tfidf', 'log-entropy', 'log-entropy-norm'],
                         help="BOW-frequency normalization method.")
     parser.add_argument('--terms', type=str, required=False,
                         help="File path containing the terms per line to calculate SemD values "
@@ -61,6 +65,12 @@ def parse_args() -> argparse.Namespace:
                         help="File path containing an MatrixMarket corpus.")
     parser.add_argument('--dictionary-path', type=str, required=False,
                         help="File path containing an dictionary (gensim or csv).")
+    parser.add_argument('--lsi-implementation', type=str, required=False, default='gensim',
+                        choices=['gensim', 'sklearn'])
+
+    parser.add_argument('--center', action='store_true', required=False)
+    parser.add_argument('--no-center', dest='center', action='store_false', required=False)
+    parser.set_defaults(center=True)
 
     parser.add_argument('--lowercase', action='store_true', required=False)
     parser.add_argument('--no-lowercase', dest='lowercase', action='store_false', required=False)
@@ -81,19 +91,6 @@ def parse_args() -> argparse.Namespace:
 
     if args.make_corpus:
         args.make_lsi = True
-
-    if args.project and not args.version:
-        args.version = args.project
-
-    if not args.version:
-        args.version = infer_file_path(
-            chunk_size=args.window,
-            min_doc_size=args.min_doc_size,
-            tagged=False,
-            lowercase=args.lowercase,
-            tags_blocklist=[],
-            with_suffix=False,
-        )
 
     args.input_fn = DATASET_STREAMS[args.corpus]
 
@@ -116,11 +113,13 @@ def calculate_semantic_diversity(terms, dictionary, corpus, document_vectors, mi
 
     mean_cos = {}
     semd_values = {}
-    for term in tqdm(terms, total=len(terms)):  # TODO: vectorize
+    nb_contexts = {}
+    for term in tqdm(terms, total=len(terms)):
         try:
             term_id = dictionary[term]
             term_docs_sparse = csc_matrix.getrow(term_id)
             current_docs = term_docs_sparse.nonzero()[1]
+            nb_contexts[term] = len(current_docs)
 
             # can only calculate similarity if word appears in multiple documents
             if len(current_docs) < max(2, min_contexts):
@@ -139,9 +138,12 @@ def calculate_semantic_diversity(terms, dictionary, corpus, document_vectors, mi
             mean_cos[term] = avg_similarity
             semd_values[term] = semd
         except (KeyError, ValueError, IndexError):
+            mean_cos[term] = np.nan
             semd_values[term] = np.nan
 
-    semd = pd.DataFrame([mean_cos, semd_values], index=['mean_cos', 'SemD']).T
+    semd = pd.DataFrame(
+        [mean_cos, semd_values, nb_contexts], index=['mean_cos', 'SemD', 'nb_contexts']
+    ).T
 
     return semd
 
@@ -233,6 +235,7 @@ def calc_entropy_normalization(corpus, word_entropies, epsilon=0.0):
 
 
 def entropy_transform(corpus, dictionary, directory, epsilon=0.0, use_cache=True):
+    print('Applying entropy transform')
 
     # TODO: individualize file name based on args
     file_name = 'entropy_transform.csv'
@@ -269,9 +272,19 @@ def entropy_transform(corpus, dictionary, directory, epsilon=0.0, use_cache=True
 
 
 def tfidf_transform(bow_corpus):
+    print('Applying tfidf transform')
+
     tfidf_model = TfidfModel(bow_corpus)
     tfidf_corpus = tfidf_model[bow_corpus]
     return tfidf_corpus
+
+
+def log_entropy_transform(bow_corpus, normalize=True):
+    print('Applying log-entropy transform')
+
+    log_entropy_model = LogEntropyModel(bow_corpus, normalize=normalize)
+    log_entropy_corpus = log_entropy_model[bow_corpus]
+    return log_entropy_corpus
 
 
 def texts2corpus(
@@ -338,30 +351,37 @@ def get_contexts(args):
         tags_blocklist=[],  # TODO: add to args
         make_if_not_cached=True,
         persist_if_not_cached=True,
+        version=args.version,
     )
     return contexts
 
 
-def normalize(bow_corpus, dictionary, normalization, directory, file_name, epsilon=0.0):
-    if normalization == 'tfidf':
-        # - tfidf transform corpus -
-        tfidf_corpus = tfidf_transform(bow_corpus)
+def normalize_weights(bow_corpus, dictionary, normalization, directory, file_name, epsilon=0.0):
+    if normalization:
 
-        # - save tf-idf corpus -
-        file_path = directory / f'{file_name}_tfidf.mm'
-        print(f"Saving {file_path}")
-        MmCorpus.serialize(str(file_path), tfidf_corpus)
-        corpus = tfidf_corpus
-    elif normalization == 'entropy':
-        # - log transform and entropy-normalize corpus -
-        entropy_corpus = entropy_transform(bow_corpus, dictionary, directory, epsilon)
-        assert len(entropy_corpus) == len(bow_corpus)
+        if normalization == 'tfidf':
+            corpus = tfidf_transform(bow_corpus)
+            file_path = directory / f'{file_name}_tfidf.mm'
 
-        # - save entropy-normalized corpus -
-        file_path = directory / f'{file_name}_entropy.mm'
+        elif normalization == 'log-entropy':
+            corpus = log_entropy_transform(bow_corpus, normalize=False)
+            file_path = directory / f'{file_name}_log-entropy.mm'
+
+        elif normalization == 'log-entropy-norm':
+            corpus = log_entropy_transform(bow_corpus, normalize=True)
+            file_path = directory / f'{file_name}_log-entropy-norm.mm'
+
+        elif normalization == 'entropy':
+            corpus = entropy_transform(bow_corpus, dictionary, directory, epsilon)
+            file_path = directory / f'{file_name}_entropy.mm'
+
+        else:
+            raise ValueError(f'{normalization} unknown.')
+
+        assert len(corpus) == len(bow_corpus)
         print(f"Saving {file_path}")
-        MmCorpus.serialize(str(file_path), entropy_corpus)
-        corpus = entropy_corpus
+        MmCorpus.serialize(str(file_path), corpus)
+
     else:
         corpus = bow_corpus
 
@@ -396,7 +416,7 @@ def make_corpus(args, directory, file_name):
     file_path = directory / f'{file_name}_bow.mm'
     print(f"Saving {file_path}")
     MmCorpus.serialize(str(file_path), bow_corpus)
-    corpus = normalize(
+    corpus = normalize_weights(
         bow_corpus, dictionary, args.normalization, directory, file_name,
         epsilon=args.epsilon
     )
@@ -428,13 +448,17 @@ def load_corpus(args, directory, file_name):
             file_path = directory / f'{file_name}_tfidf.mm'
         elif args.normalization == 'entropy':
             file_path = directory / f'{file_name}_entropy.mm'
+        elif args.normalization == 'log-entropy':
+            file_path = directory / f'{file_name}_log-entropy.mm'
+        elif args.normalization == 'log-entropy-norm':
+            file_path = directory / f'{file_name}_log-entropy-norm.mm'
 
         print(f"Loading corpus from {file_path}")
         corpus = MmCorpus(str(file_path))
     except FileNotFoundError as e:
         print(e)
         bow_corpus = load_bow_corpus(directory, file_name)
-        corpus = normalize(
+        corpus = normalize_weights(
             bow_corpus, dictionary, args.normalization, directory, file_name,
             epsilon=args.epsilon
         )
@@ -465,17 +489,17 @@ def get_sparse_corpus(args, directory, file_name):
 
 
 def make_lsi(corpus, dictionary, args, directory, file_name):
-    if 'sklearn':  # TODO: parameterize
+    center = '_cent' if args.center else ''
+
+    if args.lsi_implementation == 'sklearn':  # TODO: parameterize
         model, document_vectors, term_vectors = lsi_projection_sklearn(
             corpus=corpus, nb_topics=args.nb_topics
         )
         assert len(document_vectors) == len(corpus)
 
-        # --- save document vectors ---
-        file_path = directory / f'{file_name}_lsi_sklearn_document_vectors.csv'
-        print(f"Saving document vectors to {file_path}")
-        document_vectors.to_csv(file_path)
-    else:
+        V_file_path = directory / f'{file_name}_lsi_sklearn{center}_document_vectors.csv'
+
+    elif args.lsi_implementation == 'gensim':
         model, document_vectors, term_vectors = lsi_projection(
             corpus=corpus, dictionary=dictionary, nb_topics=args.nb_topics,
             cache_in_memory=True
@@ -484,19 +508,28 @@ def make_lsi(corpus, dictionary, args, directory, file_name):
         assert len(term_vectors) == len(dictionary)
 
         # --- save model ---
-        file_path = directory / f'{file_name}_lsi.model'
+        file_path = directory / f'{file_name}_lsi_gensim.model'
         print(f"Saving model to {file_path}")
         model.save(str(file_path))
 
-        # --- save document vectors ---
-        file_path = directory / f'{file_name}_lsi_document_vectors.csv'
-        print(f"Saving document vectors to {file_path}")
-        document_vectors.to_csv(file_path)
-
         # --- save term vectors ---
-        file_path = directory / f'{file_name}_lsi_term_vectors.csv'
+        file_path = directory / f'{file_name}_lsi_gensim_term_vectors.csv'
         print(f"Saving term vectors to {file_path}")
         term_vectors.to_csv(file_path)
+
+        V_file_path = directory / f'{file_name}_lsi_gensim{center}_document_vectors.csv'
+
+    else:
+        raise ValueError(f'Unknown LSI implementation: {args.lsi_implementation}')
+
+    if center:
+        print('Centering LSI document vectors.')
+        dv_mean = document_vectors.mean()
+        document_vectors -= dv_mean
+
+    # --- save document vectors ---
+    print(f"Saving document vectors to {V_file_path}")
+    document_vectors.to_csv(V_file_path)
 
     return document_vectors
 
@@ -529,6 +562,9 @@ def get_lsi_corpus(corpus, dictionary, args, directory, file_name):
 def main():
     args = parse_args()
     print(args)
+
+    if args.project:
+        print('Project:', args.project)
 
     file_name = f'{args.corpus}'
     directory = SEMD_DIR / args.version
