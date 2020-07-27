@@ -280,7 +280,7 @@ def tfidf_transform(bow_corpus):
 
 
 def log_entropy_transform(bow_corpus, normalize=True):
-    print('Applying log-entropy transform')
+    print(f"Applying log-entropy{'-norm' if normalize else ''} transform")
 
     log_entropy_model = LogEntropyModel(bow_corpus, normalize=normalize)
     log_entropy_corpus = log_entropy_model[bow_corpus]
