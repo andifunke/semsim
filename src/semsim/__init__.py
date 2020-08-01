@@ -4,8 +4,8 @@ __all__ = [
 ]
 __version__ = '0.1.0a1'
 
-from semsim.corpus.bnc import stream_bnc
+from semsim.corpus.bnc import stream_corpus
 
 DATASET_STREAMS = {
-    'bnc': stream_bnc,
+    'bnc': stream_corpus,
 }

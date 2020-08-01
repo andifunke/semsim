@@ -1,6 +1,5 @@
 import argparse
 import json
-import math
 from typing import Generator, List, Union, Tuple
 
 from nltk.corpus.reader.bnc import BNCCorpusReader
@@ -48,7 +47,10 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def stream_bnc(
+# TODO: wrap in class and move corpus parameter to init
+
+def stream_corpus(
+        corpus: str = BNC_CORPUS_ID,
         chunk_size: int = None,
         min_doc_size: int = None,
         tagged: bool = False,
@@ -59,6 +61,7 @@ def stream_bnc(
     """
     Parses documents from the original BNC XML corpus and streams as list of strings or tuples.
 
+    :param corpus: fixed value for BNC corpus
     :param chunk_size: Splits the documents in contexts of a maximum window size.
     :param min_doc_size: Discard all documents/contexts smaller than min_chunk_size.
     :param tagged: if False: items of the yielded lists are string tokens.
@@ -118,11 +121,12 @@ def stream_bnc(
                 yield doc
 
 
-def read_bnc(*args, **kwargs):
-    return list(stream_bnc(*args, **kwargs))
+def read_corpus(*args, **kwargs):
+    return list(stream_corpus(*args, **kwargs))
 
 
 def infer_file_path(
+        corpus: str = BNC_CORPUS_ID,
         chunk_size: int = None,
         min_doc_size: int = None,
         tagged: bool = False,
@@ -132,7 +136,6 @@ def infer_file_path(
 ) -> PathLike:
     """Returns a canonical file path for the given corpus and arguments."""
 
-    corpus_name = BNC_CORPUS_ID
     cs_suffix = f'_cs{chunk_size}' if isinstance(chunk_size, int) and chunk_size > 0 else ''
     tagged_suffix = '_tagged' if tagged else ''
     lowercase_suffix = '_lc' if lowercase else ''
@@ -142,7 +145,7 @@ def infer_file_path(
     )
     file_suffix = '.txt' if with_suffix else ''
     file_name = (
-        f'{corpus_name}'
+        f'{corpus}'
         f'{cs_suffix}'
         f'{min_doc_size_suffix}'
         f'{tagged_suffix}'
@@ -150,12 +153,13 @@ def infer_file_path(
         f'{filtered_suffix}'
         f'{file_suffix}'
     )
-    file_path = CACHE_DIR / 'corpora' / BNC_CORPUS_ID / file_name
+    file_path = CACHE_DIR / 'corpora' / corpus / file_name
 
     return file_path
 
 
 def persist_transformation(
+        corpus: str = BNC_CORPUS_ID,
         chunk_size: int = None,
         min_doc_size: int = None,
         tagged: bool = False,
@@ -169,6 +173,7 @@ def persist_transformation(
 
     The file is written to ``data/out/cache/bnc[args].txt``.
 
+    :param corpus: fixed value for BNC
     :param chunk_size: Splits the documents in contexts of a maximum window size.
     :param min_doc_size: Discard all documents/contexts smaller than min_chunk_size.
     :param tagged:
@@ -182,6 +187,7 @@ def persist_transformation(
     """
 
     out_path = infer_file_path(
+        corpus=corpus,
         chunk_size=chunk_size,
         min_doc_size=min_doc_size,
         tagged=tagged,
@@ -189,7 +195,8 @@ def persist_transformation(
         tags_blocklist=tags_blocklist,
     )
     if documents is None:
-        documents = stream_bnc(
+        documents = stream_corpus(
+            corpus=corpus,
             chunk_size=chunk_size,
             min_doc_size=min_doc_size,
             tagged=tagged,
@@ -221,6 +228,7 @@ def persist_transformation(
 
 
 def load_from_cache(
+        corpus: str = BNC_CORPUS_ID,
         chunk_size: int = None,
         min_doc_size: int = None,
         tagged: bool = False,
@@ -232,6 +240,7 @@ def load_from_cache(
 ) -> List[List]:
     """
 
+    :param corpus:
     :param chunk_size:
     :param min_doc_size:
     :param tagged:
@@ -250,6 +259,7 @@ def load_from_cache(
     out_path = CACHE_DIR / 'corpora' / BNC_CORPUS_ID / f'{version}.txt'
     if not out_path.exists():
         out_path = infer_file_path(
+            corpus=corpus,
             chunk_size=chunk_size,
             min_doc_size=min_doc_size,
             tagged=tagged,
@@ -265,7 +275,8 @@ def load_from_cache(
     except FileNotFoundError:
         make_if_not_cached |= persist_if_not_cached
         if make_if_not_cached:
-            docs = read_bnc(
+            docs = read_corpus(
+                corpus=corpus,
                 chunk_size=chunk_size,
                 min_doc_size=min_doc_size,
                 tagged=tagged,
@@ -274,6 +285,7 @@ def load_from_cache(
             )
             if persist_if_not_cached:
                 persist_transformation(
+                    corpus=corpus,
                     documents=docs,
                     chunk_size=chunk_size,
                     min_doc_size=min_doc_size,
@@ -287,9 +299,9 @@ def load_from_cache(
     return docs
 
 
-def example(args, example_='read'):
+def example(args, example_='stream'):
     if example_ == 'stream':
-        docs = stream_bnc(
+        docs = stream_corpus(
             chunk_size=args.window,
             min_doc_size=args.min_doc_size,
             tagged=args.tagged,
