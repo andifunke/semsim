@@ -1,4 +1,5 @@
 import argparse
+import csv
 import warnings
 from pathlib import Path
 
@@ -32,7 +33,7 @@ def parse_args() -> argparse.Namespace:
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('-c', '--corpus', type=str, required=True, choices=DATASET_STREAMS.keys())
+    parser.add_argument('-c', '--corpus', type=str, required=True)
     parser.add_argument('-v', '--version', type=str, required=False, default=None,
                         help="Specify a corpus version. A corpus version points to a cached "
                              "corpus file containing. The corpus version may contain special"
@@ -67,6 +68,8 @@ def parse_args() -> argparse.Namespace:
                         help="File path containing an dictionary (gensim or csv).")
     parser.add_argument('--lsi-implementation', type=str, required=False, default='gensim',
                         choices=['gensim', 'sklearn'])
+    parser.add_argument('--tags-blocklist', nargs='*', type=str, required=False, default=[],
+                        help='List of part-of-speech tags to remove from corpus.')
 
     parser.add_argument('--center', action='store_true', required=False)
     parser.add_argument('--no-center', dest='center', action='store_false', required=False)
@@ -74,7 +77,11 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument('--lowercase', action='store_true', required=False)
     parser.add_argument('--no-lowercase', dest='lowercase', action='store_false', required=False)
-    parser.set_defaults(lowercase=True)
+    parser.set_defaults(lowercase=False)
+
+    parser.add_argument('--lemmatized', action='store_true', required=False)
+    parser.add_argument('--no-lemmatized', dest='lemmatized', action='store_false', required=False)
+    parser.set_defaults(lemmatized=False)
 
     parser.add_argument('--make-corpus', dest='make_corpus', action='store_true', required=False)
     parser.add_argument('--load-corpus', dest='make_corpus', action='store_false', required=False)
@@ -92,7 +99,10 @@ def parse_args() -> argparse.Namespace:
     if args.make_corpus:
         args.make_lsi = True
 
-    args.input_fn = DATASET_STREAMS[args.corpus]
+    try:
+        args.input_fn = DATASET_STREAMS[args.corpus]
+    except KeyError:
+        args.input_fn = DATASET_STREAMS['topiclabeling']
 
     return args
 
@@ -343,12 +353,14 @@ def texts2corpus(
 def get_contexts(args):
     read_fn = reader(args.corpus)
     contexts = read_fn(
+        corpus=args.corpus,
         chunk_size=args.window,
         min_doc_size=args.min_doc_size,
         tagged=False,
         lowercase=args.lowercase,
+        lemmatized=args.lemmatized,
         # tags_allowlist=args.pos_tags,  # TODO: implement
-        tags_blocklist=[],  # TODO: add to args
+        tags_blocklist=args.tags_blocklist,
         make_if_not_cached=True,
         persist_if_not_cached=True,
         version=args.version,
@@ -513,9 +525,11 @@ def make_lsi(corpus, dictionary, args, directory, file_name):
         model.save(str(file_path))
 
         # --- save term vectors ---
-        file_path = directory / f'{file_name}_lsi_gensim_term_vectors.csv'
+        file_path = directory / f'{file_name}_lsi_word_vectors.vec'
         print(f"Saving term vectors to {file_path}")
-        term_vectors.to_csv(file_path)
+        with open(file_path, 'w') as fp:
+            fp.write(f'{term_vectors.shape[0]} {term_vectors.shape[1]}\n')
+            term_vectors.to_csv(fp, sep=' ', header=False, quoting=csv.QUOTE_NONE)
 
         V_file_path = directory / f'{file_name}_lsi_gensim{center}_document_vectors.csv'
 
@@ -567,7 +581,12 @@ def main():
         print('Project:', args.project)
 
     file_name = f'{args.corpus}'
-    directory = SEMD_DIR / args.version
+    if args.project:
+        directory = SEMD_DIR / args.project
+    elif args.version:
+        directory = SEMD_DIR / args.version
+    else:
+        directory = SEMD_DIR
     directory.mkdir(exist_ok=True, parents=True)
 
     # --- create a sparse corpus ---

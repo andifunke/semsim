@@ -69,8 +69,8 @@ def preprocess_dewac(df):
 
     def remove_title(x):
         """Removes the rows up to the first line feed (inclusive), i.e. the document title."""
-        ln_argmax = (x.text.to_numpy() == '\n').argmax()
-        return x[ln_argmax + 1:]
+        first_nl = (x.token.to_numpy() == '<newline>').argmax()
+        return x[first_nl + 1:]
 
     df = (
         df
@@ -179,6 +179,21 @@ def read_corpus(*args, **kwargs):
     return list(stream_corpus(*args, **kwargs))
 
 
+def infer_full_corpus_name(corpus: str, directory: PathLike = None):
+    if directory:
+        directory = Path(directory)
+        prefixes = r'^(' + '|'.join(corpus) + r').'
+        pattern = re.compile(prefixes)
+        files = sorted([
+            f.name.split('_nlp.')[0] for f in directory.iterdir()
+            if f.is_file() and pattern.match(f.name)
+        ])
+        all_equal = all(f == files[0] for f in files)
+        corpus = files[0] if all_equal else corpus
+
+    return corpus
+
+
 def infer_file_path(
         corpus: str,
         chunk_size: int = None,
@@ -187,7 +202,7 @@ def infer_file_path(
         lowercase: bool = False,
         lemmatized: bool = True,
         tags_blocklist: list = None,
-        with_suffix=True,
+        with_suffix: bool = True,
 ) -> PathLike:
     """Returns a canonical file path for the given corpus and arguments."""
 
@@ -195,7 +210,7 @@ def infer_file_path(
     tagged_suffix = '_tagged' if tagged else ''
     lowercase_suffix = '_lc' if lowercase else ''
     lemmatized_suffix = '_lemma' if lemmatized else ''
-    filtered_suffix = '_filtered' if tags_blocklist else ''
+    filtered_suffix = '_filtered' if tags_blocklist else ''  # TODO: read actual tags from JSON
     min_doc_size_suffix = (
         f'_minsz{min_doc_size}' if isinstance(min_doc_size, int) and min_doc_size > 0 else ''
     )
@@ -245,6 +260,10 @@ def persist_transformation(
         Omits reading the corpus again.
     """
 
+    corpus = infer_full_corpus_name(
+        corpus=corpus,
+        directory=directory,
+    )
     out_path = infer_file_path(
         corpus=corpus,
         chunk_size=chunk_size,
@@ -270,6 +289,7 @@ def persist_transformation(
     out_path.parent.mkdir(exist_ok=True, parents=True)
     with open(out_path, 'w') as fp:
         print(f"Writing to {out_path}")
+        i = None
         for i, doc in enumerate(documents):
             doc = ' '.join(doc).replace('\n', '<P>')
             fp.write(doc + '\n')
