@@ -3,6 +3,7 @@
 """Converts corpora from the topic-labeling package format to the simple semsim format."""
 
 import argparse
+import csv
 import json
 import re
 from pathlib import Path
@@ -68,7 +69,7 @@ def preprocess_dewac(df):
 
     def remove_title(x):
         """Removes the rows up to the first line feed (inclusive), i.e. the document title."""
-        ln_argmax = (x.text.values == '\n').argmax()
+        ln_argmax = (x.text.to_numpy() == '\n').argmax()
         return x[ln_argmax + 1:]
 
     df = (
@@ -135,21 +136,23 @@ def stream_corpus(
 
     for file in files:
         corpus_name = file.name.split('_nlp.')[0]
+        text_col = 'token' if lemmatized else 'text'
         print(f"reading from {file}")
-        df_main = pd.read_pickle(file)
+        df = pd.read_csv(
+            file, sep='\t', header=0, usecols=['hash', text_col, 'POS'],
+            keep_default_na=False, dtype={'hash': int, 'token': str, 'pos': 'category'},
+            lineterminator='\n', quoting=csv.QUOTE_NONE,
+        )
+        df.columns = ['hash', 'token', 'pos']
 
         if corpus_name.startswith('dewac'):
-            df_main = preprocess_dewac(df_main)
+            df = preprocess_dewac(df)
         elif corpus_name.startswith('dewiki'):
-            df_main = preprocess_dewiki(df_main)
+            df = preprocess_dewiki(df)
 
-        df_main = df_main.groupby('hash', sort=False)
+        df = df.groupby('hash', sort=False)
 
-        for _, doc in tqdm(df_main, total=len(df_main)):
-            text_col = 'token' if lemmatized else 'text'
-            doc = doc[[text_col, 'POS']]
-            doc.columns = ['token', 'pos']
-
+        for _, doc in tqdm(df, total=len(df)):
             if tags_blocklist:
                 doc = doc[~doc.pos.isin(tags_blocklist)]
             if lowercase:
@@ -191,6 +194,7 @@ def infer_file_path(
     cs_suffix = f'_cs{chunk_size}' if isinstance(chunk_size, int) and chunk_size > 0 else ''
     tagged_suffix = '_tagged' if tagged else ''
     lowercase_suffix = '_lc' if lowercase else ''
+    lemmatized_suffix = '_lemma' if lemmatized else ''
     filtered_suffix = '_filtered' if tags_blocklist else ''
     min_doc_size_suffix = (
         f'_minsz{min_doc_size}' if isinstance(min_doc_size, int) and min_doc_size > 0 else ''
@@ -202,6 +206,7 @@ def infer_file_path(
         f'{min_doc_size_suffix}'
         f'{tagged_suffix}'
         f'{lowercase_suffix}'
+        f'{lemmatized_suffix}'
         f'{filtered_suffix}'
         f'{file_suffix}'
     )
@@ -233,6 +238,7 @@ def persist_transformation(
         if False: items of the yielded lists are string tokens.
         if True: items of the yielded lists are tuples in the format ``(token, pos_tag)``.
     :param lowercase: Converts all tokens to lowercase if True.
+    :param lemmatized: return a lemma instead of the surface form.
     :param tags_blocklist: Removes all tokens from the contexts with pos-tags in this blocklist.
     :param directory: Optional: path to a BNC XML corpus. Uses the default path if None.
     :param documents: Optional: pass an already loaded and parsed corpus as list of lists.
@@ -302,6 +308,7 @@ def load_from_cache(
     :param min_doc_size:
     :param tagged:
     :param lowercase:
+    :param lemmatized: return a lemma instead of the surface form.
     :param tags_blocklist:
     :param make_if_not_cached: Performs a new transformation for the given arguments,
         if loading from cache fails.

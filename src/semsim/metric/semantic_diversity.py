@@ -256,8 +256,8 @@ def entropy_transform(corpus, dictionary, directory, epsilon=0.0, use_cache=True
         df = pd.concat([dfs, cfs], axis=1, )
         wordcount_per_mil = cfs.sum() / 1_000_000
         df['freq'] = (df.corpus_freq / wordcount_per_mil).astype('float32')
-        df['log_freq'] = np.log10(df.freq.values + epsilon, dtype='float32')
-        df['entropy'] = calc_entropy(corpus, corpus_freqs=df.corpus_freq.values)
+        df['log_freq'] = np.log10(df.freq.to_numpy() + epsilon, dtype='float32')
+        df['entropy'] = calc_entropy(corpus, corpus_freqs=df.corpus_freq.to_numpy())
         df['term_id'] = df.index
         df['term'] = df.term_id.map(lambda x: dictionary[x])
         df = df.set_index('term')
@@ -265,7 +265,7 @@ def entropy_transform(corpus, dictionary, directory, epsilon=0.0, use_cache=True
 
     # calculate transformation
     transformed_corpus = calc_entropy_normalization(
-        corpus, word_entropies=df.entropy.values, epsilon=epsilon
+        corpus, word_entropies=df.entropy.to_numpy(), epsilon=epsilon
     )
 
     return transformed_corpus
@@ -591,7 +591,7 @@ def main():
             terms = dictionary.keys()
         project_suffix = f'_{args.project}' if args.project else ''
         file_path = directory / f'{file_name}{project_suffix}.semd'
-    semd_values = calculate_semantic_diversity(terms, dictionary, corpus, lsi_vectors.values)
+    semd_values = calculate_semantic_diversity(terms, dictionary, corpus, lsi_vectors.to_numpy())
 
     # - save SemD values for vocabulary -
     print(f"Saving SemD values to {file_path}")
