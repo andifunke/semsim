@@ -11,7 +11,6 @@ import pandas as pd
 from gensim.corpora import Dictionary, MmCorpus
 from gensim.matutils import corpus2dense, corpus2csc
 from gensim.models import TfidfModel, LsiModel, LogEntropyModel
-from sklearn.decomposition import TruncatedSVD
 from sklearn.metrics.pairwise import cosine_similarity
 from tqdm import tqdm
 
@@ -58,16 +57,19 @@ def parse_args() -> argparse.Namespace:
                         help="File path containing the terms per line to calculate SemD values "
                              "for.")
     parser.add_argument('--vocab', type=str, required=False,
-                        help="File path containing terms per line to include in the "
-                             "term-document-matrix. Any other term is excluded.")
+                        help="File path containing terms per line to be included in the "
+                             "term-document-matrix. "
+                             "Terms will only be in the tdm, if found in the corpus.")
+    parser.add_argument('--vocab-exclusive', action='store_true', required=False,
+                        help="Remove all terms not included in the external vocab.")
+    parser.set_defaults(vocab_exclusive=False)
+
     parser.add_argument('--document-vectors', type=str, required=False,
                         help="File path to a csv file containing document vectors.")
     parser.add_argument('--corpus-path', type=str, required=False,
                         help="File path containing an MatrixMarket corpus.")
     parser.add_argument('--dictionary-path', type=str, required=False,
                         help="File path containing an dictionary (gensim or csv).")
-    parser.add_argument('--lsi-implementation', type=str, required=False, default='gensim',
-                        choices=['gensim', 'sklearn'])
     parser.add_argument('--tags-blocklist', nargs='*', type=str, required=False, default=[],
                         help='List of part-of-speech tags to remove from corpus.')
 
@@ -91,6 +93,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--load-lsi', dest='make_lsi', action='store_false', required=False)
     parser.set_defaults(make_lsi=False)
 
+    parser.add_argument('--memory-efficient', dest='streamed', action='store_true', required=False,
+                        help="Recommended for large corpora and limited memory capacity."
+                             "May be slower.")
+    parser.set_defaults(streamed=False)
+
     args = parser.parse_args()
 
     if args.pos_tags is not None:
@@ -98,6 +105,10 @@ def parse_args() -> argparse.Namespace:
 
     if args.make_corpus:
         args.make_lsi = True
+
+    if args.streamed and args.normalization in ['entropy', 'log-entropy', 'log-entropy-norm']:
+        print(f"WARNING: {args.normalization} does not fully support streamed corpora. "
+              "The normalization may require more memory than expected.")
 
     try:
         args.input_fn = DATASET_STREAMS[args.corpus]
@@ -177,27 +188,6 @@ def lsi_projection(corpus, dictionary, nb_topics=300, cache_in_memory=False):
     document_vectors = pd.DataFrame(document_vectors)
 
     return model, document_vectors, term_vectors
-
-
-def lsi_projection_sklearn(corpus, nb_topics=300):
-    csc_matrix = corpus2csc(corpus, dtype=np.float32).T
-    print(f"Size of train_set={csc_matrix.shape[0]}")
-
-    # --- train ---
-    print(f"Training LSI model with {nb_topics} topics")
-    svd = TruncatedSVD(n_components=nb_topics)
-    svdMatrix = svd.fit_transform(csc_matrix)
-
-    # --- get vectors ---
-    # term_vectors = svd.projection.u
-    # term_vectors = pd.DataFrame(term_vectors, index=dictionary.token2id.keys())
-
-    term_vectors = None
-    document_vectors = svdMatrix
-    # document_vectors = corpus2dense(lsi_corpus, 300, num_docs=len(corpus)).T
-    document_vectors = pd.DataFrame(document_vectors)
-
-    return svd, document_vectors, term_vectors
 
 
 def docs_to_lists(token_series):
@@ -286,66 +276,92 @@ def tfidf_transform(bow_corpus):
 
     tfidf_model = TfidfModel(bow_corpus)
     tfidf_corpus = tfidf_model[bow_corpus]
+
     return tfidf_corpus
 
 
 def log_entropy_transform(bow_corpus, normalize=True):
     print(f"Applying log-entropy{'-norm' if normalize else ''} transform")
 
-    log_entropy_model = LogEntropyModel(bow_corpus, normalize=normalize)
+    # train model
+    try:
+        log_entropy_model = LogEntropyModel(bow_corpus, normalize=normalize)
+    except ValueError:
+        print('Loading corpus into memory')
+        bow_corpus = list(tqdm(bow_corpus, unit=' documents'))
+        log_entropy_model = LogEntropyModel(bow_corpus, normalize=normalize)
+
+    # apply model
     log_entropy_corpus = log_entropy_model[bow_corpus]
+
     return log_entropy_corpus
 
 
-def texts2corpus(
-        contexts, stopwords=None, vocab=None, min_word_freq=1, min_contexts=1, filter_above=1,
-        keep_n=None
-):
+def texts2corpus(args):
+    stopwords = []
+
     print(f"Generating dictionary.")
-
+    contexts = get_contexts(args)
     dictionary = Dictionary(contexts, prune_at=None)
-
-    vocab_size = len(dictionary)
-    dictionary.filter_extremes(no_below=min_contexts, no_above=filter_above, keep_n=keep_n)
-    print(
-        f"Removing {vocab_size - len(dictionary)} terms "
-        f"appearing in less than {min_contexts} contexts."
-    )
     vocab_size = len(dictionary)
 
-    # apply allowlist by a predefined vocabulary
-    if vocab:
-        with open(vocab, 'r') as fp:
-            print(f'Loading vocab file {vocab}')
-            vocab_ = {line.strip() for line in fp.readlines()}
-            print(f'{len(vocab_)} terms loaded.')
+    # load allowlist from a predefined vocabulary
+    if args.vocab:
+        with open(args.vocab) as fp:
+            print(f'Loading vocab file {args.vocab}')
+            vocab_terms = sorted({line.strip() for line in fp.readlines()})
+            print(f'{len(vocab_terms)} terms loaded.')
+    else:
+        vocab_terms = []
 
+    if args.vocab_exclusive:
         good_ids = [
-            dictionary.token2id[token] for token in vocab_ if token in dictionary.token2id
+            dictionary.token2id[token] for token in vocab_terms
+            if token in dictionary.token2id
         ]
         dictionary.filter_tokens(good_ids=good_ids)
         print(f"Removing {vocab_size - len(dictionary)} tokens not in predefined vocab.")
-        vocab_size = len(dictionary)
-
-    # filter noise (e.g. stopwords, special characters, infrequent words)
-    if stopwords:
-        bad_ids = [dictionary.token2id[token] for token in stopwords]
-        dictionary.filter_tokens(bad_ids=bad_ids)
-        print(f"Removing {len(dictionary) - vocab_size} stopword tokens.")
-        vocab_size = len(dictionary)
-
-    if min_word_freq > 1:
-        bad_ids = [k for k, v in dictionary.cfs.items() if v < min_word_freq]
-        dictionary.filter_tokens(bad_ids=bad_ids)
-        print(
-            f"Removing {vocab_size - len(dictionary)} terms with min frequency < {min_word_freq}."
+    else:
+        dictionary.filter_extremes(
+            no_below=args.min_contexts, no_above=1., keep_n=args.keep_n, keep_tokens=vocab_terms
         )
+        print(
+            f"Removing {vocab_size - len(dictionary)} terms "
+            f"appearing in less than {args.min_contexts} contexts."
+        )
+        vocab_size = len(dictionary)
+
+        # filter noise (e.g. stopwords, special characters, infrequent words)
+        if stopwords:
+            bad_ids = [
+                dictionary.token2id[token] for token in stopwords
+                if token not in vocab_terms
+            ]
+            dictionary.filter_tokens(bad_ids=bad_ids)
+            print(f"Removing {len(dictionary) - vocab_size} stopword tokens.")
+            vocab_size = len(dictionary)
+
+        if args.min_word_freq > 1:
+            bad_ids = [
+                k for k, v in dictionary.cfs.items()
+                if v < args.min_word_freq and dictionary[k] not in vocab_terms
+            ]
+            dictionary.filter_tokens(bad_ids=bad_ids)
+            print(
+                f"Removing {vocab_size - len(dictionary)} terms with min frequency "
+                f"< {args.min_word_freq}."
+            )
 
     dictionary.compactify()
     print(f"Dictionary size: {len(dictionary)}")
 
-    print(f"Generating bow corpus from {len(contexts)} contexts.")
-    bow_corpus = [dictionary.doc2bow(text) for text in contexts]
+    try:
+        print(f"Generating bow corpus from {len(contexts)} contexts.")
+        bow_corpus = [dictionary.doc2bow(text) for text in contexts]
+    except TypeError:
+        print(f"Generating bow corpus from contexts.")
+        contexts = get_contexts(args)
+        bow_corpus = map(lambda text: dictionary.doc2bow(text), contexts)
 
     return bow_corpus, dictionary
 
@@ -362,8 +378,9 @@ def get_contexts(args):
         # tags_allowlist=args.pos_tags,  # TODO: implement
         tags_blocklist=args.tags_blocklist,
         make_if_not_cached=True,
-        persist_if_not_cached=True,
+        persist_if_not_cached=not args.streamed,
         version=args.version,
+        as_stream=args.streamed,
     )
     return contexts
 
@@ -401,12 +418,7 @@ def normalize_weights(bow_corpus, dictionary, normalization, directory, file_nam
 
 
 def make_corpus(args, directory, file_name):
-    contexts = get_contexts(args)
-    bow_corpus, dictionary = texts2corpus(
-        contexts, stopwords=None, vocab=args.vocab,
-        min_word_freq=args.min_word_freq, min_contexts=args.min_contexts, keep_n=args.keep_n
-    )
-    assert len(contexts) == len(bow_corpus)
+    bow_corpus, dictionary = texts2corpus(args)
 
     # - save dictionary -
     file_path = directory / f'{file_name}.dict'
@@ -428,6 +440,10 @@ def make_corpus(args, directory, file_name):
     file_path = directory / f'{file_name}_bow.mm'
     print(f"Saving {file_path}")
     MmCorpus.serialize(str(file_path), bow_corpus)
+
+    if args.streamed:
+        bow_corpus = load_bow_corpus(directory, file_name)
+
     corpus = normalize_weights(
         bow_corpus, dictionary, args.normalization, directory, file_name,
         epsilon=args.epsilon
@@ -503,38 +519,26 @@ def get_sparse_corpus(args, directory, file_name):
 def make_lsi(corpus, dictionary, args, directory, file_name):
     center = '_cent' if args.center else ''
 
-    if args.lsi_implementation == 'sklearn':  # TODO: parameterize
-        model, document_vectors, term_vectors = lsi_projection_sklearn(
-            corpus=corpus, nb_topics=args.nb_topics
-        )
-        assert len(document_vectors) == len(corpus)
+    model, document_vectors, term_vectors = lsi_projection(
+        corpus=corpus, dictionary=dictionary, nb_topics=args.nb_topics,
+        cache_in_memory=not args.streamed
+    )
+    assert len(document_vectors) == len(corpus)
+    assert len(term_vectors) == len(dictionary)
 
-        V_file_path = directory / f'{file_name}_lsi_sklearn{center}_document_vectors.csv'
+    # --- save model ---
+    file_path = directory / f'{file_name}_lsi_gensim.model'
+    print(f"Saving model to {file_path}")
+    model.save(str(file_path))
 
-    elif args.lsi_implementation == 'gensim':
-        model, document_vectors, term_vectors = lsi_projection(
-            corpus=corpus, dictionary=dictionary, nb_topics=args.nb_topics,
-            cache_in_memory=True
-        )
-        assert len(document_vectors) == len(corpus)
-        assert len(term_vectors) == len(dictionary)
+    # --- save term vectors ---
+    file_path = directory / f'{file_name}_lsi_word_vectors.vec'
+    print(f"Saving term vectors to {file_path}")
+    with open(file_path, 'w') as fp:
+        fp.write(f'{term_vectors.shape[0]} {term_vectors.shape[1]}\n')
+        term_vectors.to_csv(fp, sep=' ', header=False, quoting=csv.QUOTE_NONE)
 
-        # --- save model ---
-        file_path = directory / f'{file_name}_lsi_gensim.model'
-        print(f"Saving model to {file_path}")
-        model.save(str(file_path))
-
-        # --- save term vectors ---
-        file_path = directory / f'{file_name}_lsi_word_vectors.vec'
-        print(f"Saving term vectors to {file_path}")
-        with open(file_path, 'w') as fp:
-            fp.write(f'{term_vectors.shape[0]} {term_vectors.shape[1]}\n')
-            term_vectors.to_csv(fp, sep=' ', header=False, quoting=csv.QUOTE_NONE)
-
-        V_file_path = directory / f'{file_name}_lsi_gensim{center}_document_vectors.csv'
-
-    else:
-        raise ValueError(f'Unknown LSI implementation: {args.lsi_implementation}')
+    V_file_path = directory / f'{file_name}_lsi_gensim{center}_document_vectors.csv'
 
     if center:
         print('Centering LSI document vectors.')

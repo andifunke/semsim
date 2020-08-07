@@ -7,7 +7,7 @@ import csv
 import json
 import re
 from pathlib import Path
-from typing import Generator, List, Union, Tuple
+from typing import Generator, List, Union, Tuple, Iterator
 
 import pandas as pd
 from tqdm import tqdm
@@ -67,17 +67,17 @@ def preprocess_dewac(df):
         GOOD_IDS_DEWAC = pd.read_pickle(META_DIR / 'dewac_good_ids.pickle')
     df = df[df.hash.isin(GOOD_IDS_DEWAC.index)]
 
-    def remove_title(x):
-        """Removes the rows up to the first line feed (inclusive), i.e. the document title."""
-        first_nl = (x.token.to_numpy() == '<newline>').argmax()
-        return x[first_nl + 1:]
-
-    df = (
-        df
-        .groupby('hash', sort=False, as_index=False)
-        .progress_apply(remove_title)
-        .reset_index(level=0, drop=True)
-    )
+    # def remove_title(x):
+    #    """Removes the rows up to the first line feed (inclusive), i.e. the document title."""
+    #    first_nl = (x.token.to_numpy() == '<newline>').argmax()
+    #    return x[first_nl + 1:]
+    #
+    # df = (
+    #     df
+    #     .groupby('hash', sort=False, as_index=False)
+    #     .progress_apply(remove_title)
+    #     .reset_index(level=0, drop=True)
+    # )
     return df
 
 
@@ -127,12 +127,13 @@ def stream_corpus(
     print(f"Streaming corpus '{corpus}' from {directory}")
 
     # filter files for certain prefixes
-    prefixes = r'^(' + '|'.join(corpus) + r').'
-    pattern = re.compile(prefixes)
+    pattern = re.compile(corpus, re.IGNORECASE)
     files = sorted([
         f for f in directory.iterdir()
         if f.is_file() and pattern.match(f.name)
     ])
+    if not files:
+        raise FileNotFoundError(f"Cannot find corpus for prefix '{corpus}' in {directory}")
 
     for file in files:
         corpus_name = file.name.split('_nlp.')[0]
@@ -239,7 +240,7 @@ def persist_transformation(
         lemmatized: bool = True,
         tags_blocklist: list = None,
         directory: PathLike = None,
-        documents: List[List] = None,
+        documents: Iterator[List] = None,
 ):
     """
     Parses documents from the original BNC XML format and writes it as plain text to a file.
@@ -318,8 +319,9 @@ def load_from_cache(
         lemmatized: bool = True,
         tags_blocklist: list = None,
         make_if_not_cached: bool = True,
-        persist_if_not_cached: bool = True,
+        persist_if_not_cached: bool = False,
         version: str = None,
+        as_stream: bool = False,
 ) -> List[List]:
     """
 
@@ -336,9 +338,11 @@ def load_from_cache(
         transformation to a plain text file.
     :param version: an optional version id where the version id corresponds to a
         cached corpora file.
+    :param as_stream: returns a generator instead of a list.
 
     :return: List of lists of tokens.
     """
+    as_stream &= not persist_if_not_cached
 
     out_path = CACHE_DIR / 'corpora' / corpus / f'{version}.txt'
     if not out_path.exists():
@@ -353,22 +357,44 @@ def load_from_cache(
         )
     # TODO: read meta data first and verify identity of tags_blocklist
 
+    fp = None
     try:
-        with open(out_path, 'r') as fp:
+        if not out_path.exists():
+            raise FileNotFoundError(f"Path {out_path} does not exists.")
+        fp = open(out_path)
+        docs = map(lambda x: x.strip().split(), tqdm(fp, unit=' documents'))
+        if not as_stream:
             print(f"Loading {out_path}")
-            docs = [c.strip().split() for c in fp.readlines()]
+            docs = list(docs)
+            fp.close()
     except FileNotFoundError:
+        try:
+            fp.close()
+        except AttributeError:
+            pass
+
         make_if_not_cached |= persist_if_not_cached
         if make_if_not_cached:
-            docs = read_corpus(
-                corpus=corpus,
-                chunk_size=chunk_size,
-                min_doc_size=min_doc_size,
-                tagged=tagged,
-                lowercase=lowercase,
-                lemmatized=lemmatized,
-                tags_blocklist=tags_blocklist,
-            )
+            if as_stream:
+                docs = stream_corpus(
+                    corpus=corpus,
+                    chunk_size=chunk_size,
+                    min_doc_size=min_doc_size,
+                    tagged=tagged,
+                    lowercase=lowercase,
+                    lemmatized=lemmatized,
+                    tags_blocklist=tags_blocklist,
+                )
+            else:
+                docs = read_corpus(
+                    corpus=corpus,
+                    chunk_size=chunk_size,
+                    min_doc_size=min_doc_size,
+                    tagged=tagged,
+                    lowercase=lowercase,
+                    lemmatized=lemmatized,
+                    tags_blocklist=tags_blocklist,
+                )
             if persist_if_not_cached:
                 persist_transformation(
                     corpus=corpus,

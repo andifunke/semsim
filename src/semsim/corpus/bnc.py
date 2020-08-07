@@ -237,6 +237,7 @@ def load_from_cache(
         make_if_not_cached: bool = True,
         persist_if_not_cached: bool = True,
         version: str = None,
+        as_stream: bool = False,
 ) -> List[List]:
     """
 
@@ -252,6 +253,7 @@ def load_from_cache(
         transformation to a plain text file.
     :param version: an optional version id where the version id corresponds to a
         cached corpora file.
+    :param as_stream: returns a generator instead of a list.
 
     :return: List of lists of tokens.
     """
@@ -271,18 +273,31 @@ def load_from_cache(
     try:
         with open(out_path, 'r') as fp:
             print(f"Loading {out_path}")
-            docs = [c.strip().split() for c in fp.readlines()]
+            if as_stream:
+                raise NotImplementedError ## TODO
+            else:
+                docs = [c.strip().split() for c in fp.readlines()]
     except FileNotFoundError:
         make_if_not_cached |= persist_if_not_cached
         if make_if_not_cached:
-            docs = read_corpus(
-                corpus=corpus,
-                chunk_size=chunk_size,
-                min_doc_size=min_doc_size,
-                tagged=tagged,
-                lowercase=lowercase,
-                tags_blocklist=tags_blocklist,
-            )
+            if as_stream:
+                docs = stream_corpus(
+                    corpus=corpus,
+                    chunk_size=chunk_size,
+                    min_doc_size=min_doc_size,
+                    tagged=tagged,
+                    lowercase=lowercase,
+                    tags_blocklist=tags_blocklist,
+                )
+            else:
+                docs = read_corpus(
+                    corpus=corpus,
+                    chunk_size=chunk_size,
+                    min_doc_size=min_doc_size,
+                    tagged=tagged,
+                    lowercase=lowercase,
+                    tags_blocklist=tags_blocklist,
+                )
             if persist_if_not_cached:
                 persist_transformation(
                     corpus=corpus,
