@@ -1,15 +1,13 @@
 import argparse
 import csv
+import re
 import warnings
 from pathlib import Path
-
-# TODO: remove when tqdm fully supports pandas >= 0.25
-warnings.simplefilter(action='ignore', category=FutureWarning)
 
 import numpy as np
 import pandas as pd
 from gensim.corpora import Dictionary, MmCorpus
-from gensim.matutils import corpus2dense, corpus2csc
+from gensim.matutils import corpus2dense
 from gensim.models import TfidfModel, LsiModel, LogEntropyModel
 from sklearn.metrics.pairwise import cosine_similarity
 from tqdm import tqdm
@@ -18,6 +16,8 @@ from semsim import DATASET_STREAMS
 from semsim.constants import SEMD_DIR
 from semsim.corpus.dataio import reader
 
+# TODO: remove when tqdm fully supports pandas >= 0.25
+warnings.simplefilter(action='ignore', category=FutureWarning)
 tqdm.pandas()
 np.random.seed(42)
 
@@ -63,6 +63,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--vocab-exclusive', action='store_true', required=False,
                         help="Remove all terms not included in the external vocab.")
     parser.set_defaults(vocab_exclusive=False)
+    parser.add_argument('--words-only', action='store_true', required=False,
+                        help="Will remove all tokens containing special characters or numbers.")
+    parser.set_defaults(words_only=False)
 
     parser.add_argument('--document-vectors', type=str, required=False,
                         help="File path to a csv file containing document vectors.")
@@ -96,6 +99,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--memory-efficient', dest='streamed', action='store_true', required=False,
                         help="Recommended for large corpora and limited memory capacity."
                              "May be slower.")
+
     parser.set_defaults(streamed=False)
 
     args = parser.parse_args()
@@ -124,13 +128,12 @@ def calculate_semantic_diversity(terms, dictionary, corpus, document_vectors, mi
     if isinstance(dictionary, Dictionary):
         dictionary = dictionary.token2id
 
-    csc_matrix = corpus2csc(corpus, dtype=np.float32)
-    if csc_matrix.shape[0] != len(dictionary):
-        print(
-            f"TDM vocabulary shape {csc_matrix.shape[0]} "
-            f"differs from vocabulary length {len(dictionary)}"
-        )
-    assert csc_matrix.shape[1] == len(corpus)
+    terms = sorted({term for term in terms})
+    term_ids = {dictionary[term]: [] for term in terms if dictionary.get(term)}
+    for doc_id, doc in enumerate(tqdm(corpus)):
+        for term_id, _ in doc:
+            if term_id in term_ids:
+                term_ids[term_id].append(doc_id)
 
     mean_cos = {}
     semd_values = {}
@@ -138,8 +141,7 @@ def calculate_semantic_diversity(terms, dictionary, corpus, document_vectors, mi
     for term in tqdm(terms, total=len(terms)):
         try:
             term_id = dictionary[term]
-            term_docs_sparse = csc_matrix.getrow(term_id)
-            current_docs = term_docs_sparse.nonzero()[1]
+            current_docs = term_ids[term_id]
             nb_contexts[term] = len(current_docs)
 
             # can only calculate similarity if word appears in multiple documents
@@ -322,20 +324,21 @@ def texts2corpus(args):
         dictionary.filter_tokens(good_ids=good_ids)
         print(f"Removing {vocab_size - len(dictionary)} tokens not in predefined vocab.")
     else:
-        dictionary.filter_extremes(
-            no_below=args.min_contexts, no_above=1., keep_n=args.keep_n, keep_tokens=vocab_terms
-        )
-        print(
-            f"Removing {vocab_size - len(dictionary)} terms "
-            f"appearing in less than {args.min_contexts} contexts."
-        )
-        vocab_size = len(dictionary)
+        if args.min_contexts:
+            dictionary.filter_extremes(
+                no_below=args.min_contexts, no_above=1., keep_n=None, keep_tokens=vocab_terms
+            )
+            print(
+                f"Removing {vocab_size - len(dictionary)} terms "
+                f"appearing in less than {args.min_contexts} contexts."
+            )
+            vocab_size = len(dictionary)
 
         # filter noise (e.g. stopwords, special characters, infrequent words)
         if stopwords:
             bad_ids = [
-                dictionary.token2id[token] for token in stopwords
-                if token not in vocab_terms
+                dictionary.token2id[term] for term in stopwords
+                if term not in vocab_terms
             ]
             dictionary.filter_tokens(bad_ids=bad_ids)
             print(f"Removing {len(dictionary) - vocab_size} stopword tokens.")
@@ -351,6 +354,23 @@ def texts2corpus(args):
                 f"Removing {vocab_size - len(dictionary)} terms with min frequency "
                 f"< {args.min_word_freq}."
             )
+            vocab_size = len(dictionary)
+
+        if args.words_only:
+            re_word = re.compile(r"^[^\d\W]+$")
+            bad_ids = [
+                dictionary.token2id[term] for term in dictionary.token2id
+                if re_word.match(term) is None and term not in vocab_terms
+            ]
+            dictionary.filter_tokens(bad_ids=bad_ids)
+            print(f"Removing {vocab_size - len(dictionary)} tokens which are not regular words.")
+            vocab_size = len(dictionary)
+
+        if args.keep_n:
+            dictionary.filter_extremes(
+                no_below=1, no_above=1., keep_n=args.keep_n, keep_tokens=vocab_terms
+            )
+            print(f"Removing {vocab_size - len(dictionary)} terms to keep <= {args.keep_n} terms.")
 
     dictionary.compactify()
     print(f"Dictionary size: {len(dictionary)}")
@@ -554,7 +574,8 @@ def make_lsi(corpus, dictionary, args, directory, file_name):
 
 def load_lsi(directory, file_name):
     # --- load document vectors ---
-    file_path = directory / f'{file_name}_lsi_document_vectors.csv'
+    # TODO: file name is irregular
+    file_path = directory / f'{file_name}_lsi_gensim_cent_document_vectors.csv'
     print(f"Loading document vectors from {file_path}")
     document_vectors = pd.read_csv(file_path, index_col=0, dtype=np.float32)
 
@@ -602,7 +623,6 @@ def main():
         terms_path = Path(args.terms).resolve()
         with open(terms_path) as fp:
             terms = [line.strip() for line in fp.readlines()]
-            print(terms)
         if args.project:
             file_path = directory / f'{args.project}.semd'
         else:

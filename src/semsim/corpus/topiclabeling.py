@@ -67,17 +67,6 @@ def preprocess_dewac(df):
         GOOD_IDS_DEWAC = pd.read_pickle(META_DIR / 'dewac_good_ids.pickle')
     df = df[df.hash.isin(GOOD_IDS_DEWAC.index)]
 
-    # def remove_title(x):
-    #    """Removes the rows up to the first line feed (inclusive), i.e. the document title."""
-    #    first_nl = (x.token.to_numpy() == '<newline>').argmax()
-    #    return x[first_nl + 1:]
-    #
-    # df = (
-    #     df
-    #     .groupby('hash', sort=False, as_index=False)
-    #     .progress_apply(remove_title)
-    #     .reset_index(level=0, drop=True)
-    # )
     return df
 
 
@@ -119,6 +108,7 @@ def stream_corpus(
     :returns: Generator that yields documents/contexts as lists of tokens.
     """
     # TODO: Benchmark structured data formats for strings/documents/tokens
+    # TODO: experiment with memory-mapped files.
 
     if directory is None:
         directory = NLP_DIR
