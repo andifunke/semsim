@@ -10,14 +10,12 @@ from gensim.corpora import Dictionary, MmCorpus
 from gensim.matutils import corpus2dense
 from gensim.models import TfidfModel, LsiModel, LogEntropyModel
 from sklearn.metrics.pairwise import cosine_similarity
+# TODO: remove once tqdm fully supports pandas >= 0.25
+warnings.simplefilter(action='ignore', category=FutureWarning)
 from tqdm import tqdm
 
-from semsim import DATASET_STREAMS
 from semsim.constants import SEMD_DIR
-from semsim.corpus.dataio import reader
 
-# TODO: remove when tqdm fully supports pandas >= 0.25
-warnings.simplefilter(action='ignore', category=FutureWarning)
 tqdm.pandas()
 np.random.seed(42)
 
@@ -113,11 +111,6 @@ def parse_args() -> argparse.Namespace:
     if args.streamed and args.normalization in ['entropy', 'log-entropy', 'log-entropy-norm']:
         print(f"WARNING: {args.normalization} does not fully support streamed corpora. "
               "The normalization may require more memory than expected.")
-
-    try:
-        args.input_fn = DATASET_STREAMS[args.corpus]
-    except KeyError:
-        args.input_fn = DATASET_STREAMS['topiclabeling']
 
     return args
 
@@ -387,6 +380,7 @@ def texts2corpus(args):
 
 
 def get_contexts(args):
+    # TODO: replace with corpus class lookup
     read_fn = reader(args.corpus)
     contexts = read_fn(
         corpus=args.corpus,
