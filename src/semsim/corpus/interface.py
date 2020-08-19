@@ -10,8 +10,8 @@ from semsim.constants import PathLike, CACHE_DIR, LF, TAGSET
 
 class CorpusABC:
 
-    CORPUS = NotImplemented
-    CORPUS_DIR_DEFAULT = NotImplemented
+    CORPUS: str = NotImplemented
+    CORPUS_DIR_DEFAULT: Path = NotImplemented
 
     def __init__(
             self,
@@ -60,6 +60,8 @@ class CorpusABC:
             `tags_allowlist` must be None.
         :param as_ids: replace string tokens by a hash value.
         """
+
+        self.corpus = self.CORPUS
 
         self.chunk_size = chunk_size if isinstance(chunk_size, int) else 0
         self.min_doc_size = min_doc_size if isinstance(min_doc_size, int) else 0
@@ -111,6 +113,8 @@ class CorpusABC:
 
     @property
     def name(self) -> str:
+        """Returns a parameterized or predefined name of the corpus."""
+
         if self._name:
             return self._name
 
@@ -129,29 +133,37 @@ class CorpusABC:
             f'_ids' if self.as_ids else ''
             f'_{tags_hash}' if tags_hash else ''
         )
-        name = f'{self.CORPUS}_default' if not name else f'{self.CORPUS}_{name}'
+        name = f'{self.corpus}_default' if not name else f'{self.corpus}_{name}'
 
         return name
 
     @property
     def corpus_dir(self) -> Path:
+        """Returns the base directory of original corpus files."""
+
         return self._corpus_dir if self._corpus_dir else self.CORPUS_DIR_DEFAULT
 
     @property
     def cache_dir(self) -> Path:
-        return self._cache_dir if self._cache_dir else CACHE_DIR / 'corpora' / self.CORPUS
+        """Returns the cache directory of transformed corpus."""
+
+        return self._cache_dir if self._cache_dir else CACHE_DIR / 'corpora' / self.corpus
 
     @property
     def cache_file(self) -> Path:
+        """Returns the full file path of the cached corpus transformation."""
+
         return (self.cache_dir / self.name).with_suffix('.txt')
 
     @property
-    def state(self):
+    def state(self) -> dict:
+        """Returns a dictionary containing the field values of the corpus instance."""
+
         state = dict(
-            corpus=self.CORPUS,
+            corpus=self.corpus,
             name=self.name,
-            corpus_dir=self.corpus_dir,
-            cache_dir=self.cache_dir,
+            corpus_dir=self.corpus_dir.as_posix(),
+            cache_dir=self.cache_dir.as_posix(),
             chunk_size=self.chunk_size,
             min_doc_size=self.min_doc_size,
             tagged=self.tagged,
@@ -163,10 +175,44 @@ class CorpusABC:
         )
         return state
 
+    def _docs2chunks(self, doc: List) -> Generator[List, None, None]:
+        """
+        Returns either the full document or splits the document into chunks
+        based on the chunk_size and document length.
+
+        Additionally counts the number of documents and chunks.
+        """
+
+        if self.chunk_size:
+            idx = 0
+            nb_contexts = 0
+            while idx < len(doc):
+                chunk = doc[idx:idx + self.chunk_size]
+                idx += self.chunk_size
+                if len(chunk) >= self.min_doc_size:
+                    nb_contexts += 1
+                    yield chunk
+            self.nb_contexts += nb_contexts
+            self.nb_documents += bool(nb_contexts)
+        else:
+            if len(doc) >= self.min_doc_size:
+                self.nb_documents += 1
+                self.nb_contexts = self.nb_documents
+                yield doc
+
     def _stream(self):
         raise NotImplementedError
 
     def stream(self, cached=True) -> Generator[List[Union[str, Tuple[str, str]]], None, None]:
+        """
+        Transforms documents from an original corpus into the simple semsim format.
+
+        Yields one document at a time. A document can be either a list of tokens
+        or a list of 2-tuples in the format ``(token, pos_tag)``.
+
+        :param cached: if True: additionally writes the transformation to a disk cache.
+        """
+
         if cached:
             try:
                 yield from self.stream_cache()
@@ -176,11 +222,20 @@ class CorpusABC:
             yield from self._stream()
 
     def load(self, cached=True) -> List[List[Union[str, Tuple[str, str]]]]:
+        """
+        Loads all documents into memory and returns it as a list.
+
+        :param cached: if True: additionally writes the transformation to a disk cache.
+        """
+
         return list(self.stream(cached=cached))
 
     def write_cache(self) -> Generator[List[Union[str, Tuple[str, str]]], None, None]:
+        """Transforms original documents on the fly and writes them to a disk cache."""
+
         # - write corpus as plain text -
-        self.cache_dir.parent.mkdir(exist_ok=True, parents=True)
+        cache_file = self.cache_file
+        cache_file.parent.mkdir(exist_ok=True, parents=True)
         with open(self.cache_file, 'w') as fp:
             print(f"Caching corpus to {self.cache_file}")
             for i, doc in enumerate(self._stream()):
@@ -194,6 +249,8 @@ class CorpusABC:
             json.dump(self.state, fp)
 
     def stream_cache(self) -> Generator[List[Union[str, Tuple[str, str]]], None, None]:
+        """Streams transformed documents from a disk cache."""
+
         with open(self.cache_file.with_suffix('.json')) as fp:
             state = json.load(fp)
             if not self.nb_documents:
@@ -208,4 +265,6 @@ class CorpusABC:
                 yield doc
 
     def load_cache(self) -> List[List[Union[str, Tuple[str, str]]]]:
+        """Loads the disk cache into memory."""
+
         return list(self.stream_cache())

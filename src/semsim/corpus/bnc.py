@@ -9,7 +9,7 @@ from semsim.corpus.interface import CorpusABC
 
 class BNCCorpus(CorpusABC):
 
-    CORPUS = 'bnc'
+    CORPUS = 'BNC'
     CORPUS_DIR_DEFAULT = CORPORA_DIR / 'BNC' / 'ota_20.500.12024_2554' / 'download' / 'Texts'
 
     def _stream(self) -> Generator[List[Union[str, Tuple[str, str]]], None, None]:
@@ -28,7 +28,6 @@ class BNCCorpus(CorpusABC):
 
         self.nb_documents = 0
         self.nb_contexts = 0
-        nb_contexts = 0
 
         fileids = bnc.fileids()
         for fileid in tqdm(fileids, total=len(fileids)):
@@ -41,18 +40,4 @@ class BNCCorpus(CorpusABC):
             doc = list(raw_doc)
 
             # --- apply chunk_size ---
-            if self.chunk_size:
-                idx = 0
-                while idx < len(doc):
-                    chunk = doc[idx:idx + self.chunk_size]
-                    idx += self.chunk_size
-                    if len(chunk) >= self.min_doc_size:
-                        nb_contexts += 1
-                        yield chunk
-                self.nb_contexts += nb_contexts
-                self.nb_documents += bool(nb_contexts)
-            else:
-                if len(doc) >= self.min_doc_size:
-                    self.nb_documents += 1
-                    self.nb_contexts = self.nb_documents
-                    yield doc
+            yield from self._docs2chunks(doc)
