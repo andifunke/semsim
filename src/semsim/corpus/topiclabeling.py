@@ -2,6 +2,7 @@
 
 """Converts corpora from the topic-labeling package format to the simple semsim format."""
 
+import argparse
 import csv
 import json
 import re
@@ -11,10 +12,74 @@ from typing import Generator, List, Union, Tuple, Iterator
 import pandas as pd
 from tqdm import tqdm
 
-from semsim.constants import PathLike, NLP_DIR, CACHE_DIR
+from semsim.constants import PathLike, NLP_DIR, CACHE_DIR, META_DIR
 
 tqdm.pandas()
 
+
+GOOD_IDS_DEWAC = None
+GOOD_IDS_DEWIK = None
+TAGS = {
+    'ADJ', 'ADV', 'INTJ', 'NOUN', 'PROPN', 'VERB', 'ADP', 'AUX', 'CCONJ', 'CONJ', 'DET', 'NUM',
+    'PART', 'PRON', 'SCONJ',  'PUNCT', 'SYM', 'X', 'SPACE'
+}
+
+
+def parse_args() -> argparse.Namespace:
+    """
+    Parses module-specific arguments. Solves argument dependencies and
+    returns cleaned up arguments.
+
+    :returns: arguments object
+    """
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('-c', '--corpus', type=str, required=True,
+                        help="ID or unique prefix of a topic-labeling corpus.")
+    parser.add_argument('-w', '--window', type=int, required=False, default=1000)
+    parser.add_argument('-m', '--min-doc-size', type=int, required=False, default=1,
+                        help="Discard all documents/chunk smaller than --min-doc-size.")
+    parser.add_argument('-d', '--directory', type=str, required=False, default=NLP_DIR)
+    parser.add_argument('--tags-blocklist', nargs='*', type=str, required=False, default=[],
+                        choices=TAGS)
+
+    parser.add_argument('--lowercase', action='store_true', required=False)
+    parser.add_argument('--no-lowercase', dest='lowercase', action='store_false', required=False)
+    parser.set_defaults(lowercase=False)
+
+    parser.add_argument('--tagged', action='store_true', required=False)
+    parser.add_argument('--no-tagged', dest='tagged', action='store_false', required=False)
+    parser.set_defaults(tagged=False)
+
+    parser.add_argument('--lemmatized', action='store_true', required=False)
+    parser.add_argument('--no-lemmatized', dest='lemmatized', action='store_false', required=False)
+    parser.set_defaults(lemmatized=False)
+
+    args = parser.parse_args()
+
+    return args
+
+
+def preprocess_dewac(df):
+    global GOOD_IDS_DEWAC
+    if GOOD_IDS_DEWAC is None:
+        GOOD_IDS_DEWAC = pd.read_pickle(META_DIR / 'dewac_good_ids.pickle')
+    df = df[df.hash.isin(GOOD_IDS_DEWAC.index)]
+
+    return df
+
+
+def preprocess_dewiki(df):
+    global GOOD_IDS_DEWIK
+    if GOOD_IDS_DEWIK is None:
+        GOOD_IDS_DEWIK = pd.read_pickle(META_DIR / 'dewiki_good_ids.pickle')
+    df = df[df.hash.isin(GOOD_IDS_DEWIK.index)]
+
+    return df
+
+
+# TODO: wrap in class and move corpus parameter to init
 
 def stream_corpus(
         corpus: str,
