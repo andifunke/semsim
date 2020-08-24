@@ -12,12 +12,10 @@ PACKAGE_DIR = Path(__file__).resolve().parent
 SRC_DIR = PACKAGE_DIR.parent
 PROJECT_DIR = SRC_DIR.parent
 DATA_DIR = PROJECT_DIR / 'data'
-OUT_DIR = DATA_DIR / 'out'
-NLP_DIR = OUT_DIR / 'nlp'
-META_DIR = OUT_DIR / 'meta'
-CACHE_DIR = OUT_DIR / 'cache'
-SEMD_DIR = OUT_DIR / 'SemD'
 CORPORA_DIR = DATA_DIR / 'corpora'
+CACHE_DIR = DATA_DIR / 'cache'
+METRICS_DIR = DATA_DIR / 'metrics'
+SEMD_DIR = METRICS_DIR / 'SemD'
 
 # --- typing macros ---
 PathLike = Union[Path, str, os.PathLike]

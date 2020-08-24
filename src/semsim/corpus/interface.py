@@ -1,11 +1,49 @@
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Generator, List, Union, Tuple, Any
 
+import pandas as pd
+from gensim.corpora import Dictionary, MmCorpus
 from tqdm import tqdm
 
 from semsim.constants import PathLike, CACHE_DIR, LF, TAGSET
+
+
+def init_blocklist(tags_allowlist, tags_blocklist):
+    if tags_allowlist and tags_blocklist:
+        raise ValueError(
+            'allowlist and blocklist for POS-tags are exclusive. Use only one of them.'
+        )
+
+    if tags_blocklist:
+        blocklist = set(tags_blocklist) if tags_blocklist else {}
+        unknowns = {t for t in blocklist if t not in TAGSET}
+        if unknowns:
+            raise ValueError(f'POS-tags {unknowns} in blocklist are unknown')
+        return blocklist
+
+    if tags_allowlist:
+        allowlist = set(tags_allowlist) if tags_allowlist else {}
+        unknowns = {t for t in allowlist if t not in TAGSET}
+        if unknowns:
+            raise ValueError(f'POS-tags {unknowns} in allowlist are unknown')
+        blocklist = {t for t in TAGSET if t not in allowlist}
+        return blocklist
+
+    return {}
+
+
+def hexhash(obj: Any) -> str:
+    """Hashes a string and returns the MD5 hexadecimal hash as a string."""
+
+    # TODO: catch
+    obj = json.dumps(obj, sort_keys=True, ensure_ascii=True, default=str)
+    story_hash = hashlib.md5(obj.strip().encode('utf8'))
+    hex_digest = story_hash.hexdigest()
+
+    return hex_digest
 
 
 class CorpusABC:
@@ -68,7 +106,7 @@ class CorpusABC:
         self.tagged = tagged
         self.lowercase = lowercase
         self.lemmatized = lemmatized
-        self.blocklist = self._init_blocklist(tags_allowlist, tags_blocklist)
+        self.blocklist = init_blocklist(tags_allowlist, tags_blocklist)
         self.as_ids = as_ids
 
         self._name = name
@@ -78,64 +116,58 @@ class CorpusABC:
         self.nb_documents = None
         self.nb_contexts = None
 
-    @staticmethod
-    def _init_blocklist(tags_allowlist, tags_blocklist):
-        if tags_allowlist and tags_blocklist:
-            raise ValueError(
-                'allowlist and blocklist for POS-tags are exclusive. Use only one of them.'
-            )
+        self.cached = True
+        self.streamed = True
 
-        if tags_blocklist:
-            blocklist = set(tags_blocklist) if tags_blocklist else {}
-            unknowns = {t for t in blocklist if t not in TAGSET}
-            if unknowns:
-                raise ValueError(f'POS-tags {unknowns} in blocklist are unknown')
-            return blocklist
-
-        if tags_allowlist:
-            allowlist = set(tags_allowlist) if tags_allowlist else {}
-            unknowns = {t for t in allowlist if t not in TAGSET}
-            if unknowns:
-                raise ValueError(f'POS-tags {unknowns} in allowlist are unknown')
-            blocklist = {t for t in TAGSET if t not in allowlist}
-            return blocklist
-
-        return {}
-
-    @staticmethod
-    def hexhash(obj: Any) -> str:
-        """Hashes a string and returns the MD5 hexadecimal hash as a string."""
-
-        story_hash = hashlib.md5(str(obj).strip().encode('utf8'))
-        hex_digest = story_hash.hexdigest()
-
-        return hex_digest
-
-    @property
-    def name(self) -> str:
-        """Returns a parameterized or predefined name of the corpus."""
-
-        if self._name:
-            return self._name
-
-        if self.blocklist:
-            tags = sorted(self.blocklist)
-            tags_hash = self.hexhash(tags)
-        else:
-            tags_hash = ''
-
-        name = (
-            f'_cs{self.chunk_size}' if self.chunk_size else ''
-            f'_mds{self.min_doc_size}' if self.min_doc_size else ''
-            f'_tg' if self.tagged else ''
-            f'_lc' if self.lowercase else ''
-            f'_lm' if self.lemmatized else ''
-            f'_ids' if self.as_ids else ''
-            f'_{tags_hash}' if tags_hash else ''
+        self._contexts = dict(
+            data=None,
+            id=None,
+            path=None,
+            state=None,
+            state_path=None,
         )
-        name = f'{self.corpus}_default' if not name else f'{self.corpus}_{name}'
 
-        return name
+        self._dictionary = None
+        self._dictionary_state = None
+        self._dictionary_id = None
+        self._dictionary_path = None
+
+        self._bow = None
+        self._bow_state = None
+        self._bow_id = None
+        self._bow_path = None
+
+        self._tfidf = None
+        self._tfidf_state = None
+        self._tfidf_id = None
+        self._tfidf_path = None
+
+        self._logentropy = None
+        self._logentropy_state = None
+        self._logentropy_id = None
+        self._logentropy_path = None
+
+        self._lsi = None
+        self._lsi_state = None
+        self._lsi_id = None
+        self._lsi_path = None
+
+        self._lda = None
+        self._lda_state = None
+        self._lda_id = None
+        self._lda_path = None
+
+        self._w2v = None
+        self._w2v_state = None
+        self._w2v_id = None
+        self._w2v_path = None
+
+        self._d2v = None
+        self._d2v_state = None
+        self._d2v_id = None
+        self._d2v_path = None
+
+        self.cache_dir.mkdir(exist_ok=True, parents=True)
 
     @property
     def corpus_dir(self) -> Path:
@@ -148,32 +180,6 @@ class CorpusABC:
         """Returns the cache directory of transformed corpus."""
 
         return self._cache_dir if self._cache_dir else CACHE_DIR / 'corpora' / self.corpus
-
-    @property
-    def cache_file(self) -> Path:
-        """Returns the full file path of the cached corpus transformation."""
-
-        return (self.cache_dir / self.name).with_suffix('.txt')
-
-    @property
-    def state(self) -> dict:
-        """Returns a dictionary containing the field values of the corpus instance."""
-
-        state = dict(
-            corpus=self.corpus,
-            name=self.name,
-            corpus_dir=self.corpus_dir.as_posix(),
-            cache_dir=self.cache_dir.as_posix(),
-            chunk_size=self.chunk_size,
-            min_doc_size=self.min_doc_size,
-            tagged=self.tagged,
-            lowercase=self.lowercase,
-            lemmatized=self.lemmatized,
-            blocklist=sorted(self.blocklist),
-            nb_documents=self.nb_documents,
-            nb_contexts=self.nb_contexts,
-        )
-        return state
 
     def _docs2chunks(self, doc: List) -> Generator[List, None, None]:
         """
@@ -200,43 +206,11 @@ class CorpusABC:
                 self.nb_contexts = self.nb_documents
                 yield doc
 
-    def _stream(self):
-        raise NotImplementedError
-
-    def stream(self, cached=True) -> Generator[List[Union[str, Tuple[str, str]]], None, None]:
-        """
-        Transforms documents from an original corpus into the simple semsim format.
-
-        Yields one document at a time. A document can be either a list of tokens
-        or a list of 2-tuples in the format ``(token, pos_tag)``.
-
-        :param cached: if True: additionally writes the transformation to a disk cache.
-        """
-
-        if cached:
-            try:
-                yield from self.stream_cache()
-            except FileNotFoundError:
-                yield from self.write_cache()
-        else:
-            yield from self._stream()
-
-    def load(self, cached=True) -> List[List[Union[str, Tuple[str, str]]]]:
-        """
-        Loads all documents into memory and returns it as a list.
-
-        :param cached: if True: additionally writes the transformation to a disk cache.
-        """
-
-        return list(self.stream(cached=cached))
-
-    def write_cache(self) -> Generator[List[Union[str, Tuple[str, str]]], None, None]:
+    def _write_cache(self) -> Generator[List[Union[str, Tuple[str, str]]], None, None]:
         """Transforms original documents on the fly and writes them to a disk cache."""
 
         # - write corpus as plain text -
-        cache_file = self.cache_file
-        cache_file.parent.mkdir(exist_ok=True, parents=True)
-        with open(self.cache_file, 'w') as fp:
+        with open(self.cache_file('.txt'), 'w') as fp:
             print(f"Caching corpus to {self.cache_file}")
             for i, doc in enumerate(self._stream()):
                 yield doc
@@ -245,26 +219,282 @@ class CorpusABC:
             print(f'{i} lines written.')
 
         # - write arguments as meta data -
-        with open(self.cache_file.with_suffix('.json'), 'w') as fp:
-            json.dump(self.state, fp)
+        with open(self.cache_file('.json'), 'w') as fp:
+            json.dump(self.contexts_state, fp)
 
-    def stream_cache(self) -> Generator[List[Union[str, Tuple[str, str]]], None, None]:
+    def _stream_cache(self) -> Generator[List[Union[str, Tuple[str, str]]], None, None]:
         """Streams transformed documents from a disk cache."""
 
-        with open(self.cache_file.with_suffix('.json')) as fp:
+        with open(self.cache_file('.json')) as fp:
             state = json.load(fp)
             if not self.nb_documents:
                 self.nb_documents = state.get('nb_documents')
             if not self.nb_contexts:
                 self.nb_contexts = state.get('nb_contexts')
 
-        with open(self.cache_file) as fp:
+        with open(self.cache_file('.txt')) as fp:
             print(f"Reading corpus from {self.cache_file}")
             for doc in tqdm(fp, unit=' documents'):
                 doc = doc.replace(LF, '\n')
                 yield doc
 
-    def load_cache(self) -> List[List[Union[str, Tuple[str, str]]]]:
+    def _load_cache(self) -> List[List[Union[str, Tuple[str, str]]]]:
         """Loads the disk cache into memory."""
 
-        return list(self.stream_cache())
+        return list(self._stream_cache())
+
+    def _stream(self):
+        raise NotImplementedError
+
+    def _load_contexts(self) -> List[List[Union[str, Tuple[str, str]]]]:
+        """Loads all documents into memory and returns it as a list."""
+
+        return list(self._stream_contexts())
+
+    def _stream_contexts(self) -> Generator[List[Union[str, Tuple[str, str]]], None, None]:
+        """
+        Transforms documents from an original corpus into the simple semsim format.
+
+        Yields one document at a time. A document can be either a list of tokens
+        or a list of 2-tuples in the format ``(token, pos_tag)``.
+        """
+
+        if self.cached:
+            try:
+                yield from self._stream_cache()
+            except FileNotFoundError:
+                yield from self._write_cache()
+        else:
+            yield from self._stream()
+
+    # --- CONTEXTS ---
+
+    @property
+    def contexts_path(self) -> Path:
+        if self._contexts['path'] is None:
+            self._contexts['path'] = self.cache_dir / self.contexts_id / 'contexts.txt'
+        return self._contexts['path']
+
+    @contexts_path.setter
+    def contexts_path(self, value):
+        self._contexts['path'] = Path(value)
+
+    @property
+    def contexts_id(self) -> str:
+        """Returns a parameterized or predefined name of the corpus."""
+
+        if self._name:
+            return self._name
+
+        if self.blocklist:
+            tags = sorted(self.blocklist)
+            tags_hash = hexhash(tags)
+        else:
+            tags_hash = ''
+
+        name = (
+            f'_cs{self.chunk_size}' if self.chunk_size else ''
+            f'_mds{self.min_doc_size}' if self.min_doc_size else ''
+            f'_tg' if self.tagged else ''
+            f'_lc' if self.lowercase else ''
+            f'_lm' if self.lemmatized else ''
+            f'_ids' if self.as_ids else ''
+            f'_{tags_hash}' if tags_hash else ''
+        )
+        name = f'{self.corpus}_default' if not name else f'{self.corpus}_{name}'
+
+        return name
+
+    @property
+    def contexts_state(self) -> dict:
+        """Returns a dictionary containing the field values of the corpus instance."""
+
+        state = dict(
+            corpus=self.corpus,
+            name=self.contexts_id,
+            corpus_dir=self.corpus_dir.as_posix(),
+            cache_dir=self.contexts_path.as_posix(),
+            chunk_size=self.chunk_size,
+            min_doc_size=self.min_doc_size,
+            tagged=self.tagged,
+            lowercase=self.lowercase,
+            lemmatized=self.lemmatized,
+            blocklist=sorted(self.blocklist),
+            nb_documents=self.nb_documents,
+            nb_contexts=self.nb_contexts,
+        )
+        return state
+
+    def contexts(self):
+        if self.streamed:
+            return self._stream_contexts()
+
+        return self._load_contexts()
+
+    # --- DICTIONARY ---
+
+    def _cache_dictionary(self, dictionary):
+        # - save dictionary -
+        file_path = self.cache_file('.dict')
+        print(f"Saving {file_path}")
+        dictionary.save(str(file_path))
+
+        # - save dictionary frequencies as plain text -
+        dict_table = pd.Series(dictionary.token2id).to_frame(name='idx')
+        dict_table['freq'] = dict_table['idx'].map(dictionary.cfs.get)
+        dict_table = dict_table.reset_index()
+        dict_table = dict_table.set_index('idx', drop=True).rename({'index': 'term'}, axis=1)
+        dict_table = dict_table.sort_index()
+        file_path = self.cache_file('.dict.csv')
+        print(f"Saving {file_path}")
+        dict_table.to_csv(file_path, sep='\t')
+
+    def _build_dictionary(
+            self, vocab=None, vocab_exclusive=False, min_contexts=0, stopwords=None,
+            min_word_freq=0, words_only=False, keep_n=False
+    ):
+        print(f"Building dictionary.")
+        contexts = self.contexts()
+        dictionary = Dictionary(contexts, prune_at=None)
+        vocab_size = len(dictionary)
+
+        # load allowlist from a predefined vocabulary
+        if vocab:
+            with open(vocab) as fp:
+                print(f'Loading vocab file {vocab}')
+                vocab_terms = sorted({line.strip() for line in fp.readlines()})
+                print(f'{len(vocab_terms)} terms loaded.')
+        else:
+            vocab_terms = []
+
+        if vocab_exclusive:
+            good_ids = [
+                dictionary.token2id[token] for token in vocab_terms
+                if token in dictionary.token2id
+            ]
+            dictionary.filter_tokens(good_ids=good_ids)
+            print(
+                f"Removing {vocab_size - len(dictionary)} tokens not in predefined vocab."
+            )
+        else:
+            if min_contexts:
+                dictionary.filter_extremes(
+                    no_below=min_contexts, no_above=1., keep_n=None, keep_tokens=vocab_terms
+                )
+                print(
+                    f"Removing {vocab_size - len(dictionary)} terms "
+                    f"appearing in less than {min_contexts} contexts."
+                )
+                vocab_size = len(dictionary)
+
+            # filter noise (e.g. stopwords, special characters, infrequent words)
+            if stopwords:
+                bad_ids = [
+                    dictionary.token2id[term] for term in stopwords
+                    if term not in vocab_terms
+                ]
+                dictionary.filter_tokens(bad_ids=bad_ids)
+                print(
+                    f"Removing {len(dictionary) - vocab_size} stopword tokens."
+                )
+                vocab_size = len(dictionary)
+
+            if min_word_freq > 1:
+                bad_ids = [
+                    k for k, v in dictionary.cfs.items()
+                    if v < min_word_freq and dictionary[k] not in vocab_terms
+                ]
+                dictionary.filter_tokens(bad_ids=bad_ids)
+                print(
+                    f"Removing {vocab_size - len(dictionary)} terms with min frequency "
+                    f"< {min_word_freq}."
+                )
+                vocab_size = len(dictionary)
+
+            if words_only:
+                re_word = re.compile(r"^[^\d\W]+$")
+                bad_ids = [
+                    dictionary.token2id[term] for term in dictionary.token2id
+                    if re_word.match(term) is None and term not in vocab_terms
+                ]
+                dictionary.filter_tokens(bad_ids=bad_ids)
+                print(
+                    f"Removing {vocab_size - len(dictionary)} tokens which are "
+                    f"not regular words."
+                )
+                vocab_size = len(dictionary)
+
+            if keep_n:
+                dictionary.filter_extremes(
+                    no_below=1, no_above=1., keep_n=keep_n, keep_tokens=vocab_terms
+                )
+                print(
+                    f"Removing {vocab_size - len(dictionary)} terms to keep "
+                    f"<= {keep_n} terms."
+                )
+
+        dictionary.compactify()
+        print(f"Dictionary size: {len(dictionary)}")
+        if self.cached:
+            self._cache_dictionary(dictionary)
+
+        return dictionary
+
+    @property
+    def dictionary(self):
+        if self._dictionary is None:
+            try:
+                if not self.cached:
+                    raise FileNotFoundError
+                # todo: check whether the dictionary parameters fit with the cached version
+                self._dictionary = Dictionary.load(str(self.cache_dir))
+            except FileNotFoundError:
+                self.dictionary()
+
+
+    @dictionary.setter
+    def dictionary(
+            self, vocab=None, vocab_exclusive=False, min_contexts=0, stopwords=None,
+            min_word_freq=0, words_only=False, keep_n=False
+    ):
+        if self._dictionary is None:
+            try:
+                if not self.cached:
+                    raise FileNotFoundError
+                # todo: check whether the dictionary parameters fit with the cached version
+                self._dictionary = Dictionary.load(str(self.cache_dir))
+            except FileNotFoundError:
+                self._dictionary = self._build_dictionary(
+                    vocab=vocab,
+                    vocab_exclusive=vocab_exclusive,
+                    min_contexts=min_contexts,
+                    stopwords=stopwords,
+                    min_word_freq=min_word_freq,
+                    words_only=words_only,
+                    keep_n=keep_n,
+                )
+
+    def _cache_bow(self, bow_corpus):
+        # - save bow corpus -
+        file_path = directory / f'{file_name}_bow.mm'
+        print(f"Saving {file_path}")
+        MmCorpus.serialize(str(file_path), bow_corpus)
+
+    def _build_bow(self):
+
+    def bow(self):
+        if
+
+        contexts = self.contexts()
+        dictionary = self.dictionary()
+        try:
+            print(f"Generating bow corpus from {len(contexts)} contexts.")
+            bow_corpus = [dictionary.doc2bow(text) for text in contexts]
+        except TypeError:
+            print(f"Generating bow corpus from {self.nb_contexts} contexts.")
+            bow_corpus = map(lambda text: dictionary.doc2bow(text), contexts)
+
+        if self.cached:
+            self._cache_bow(bow_corpus)
+
+        return bow_corpus

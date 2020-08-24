@@ -292,113 +292,6 @@ def log_entropy_transform(bow_corpus, normalize=True):
     return log_entropy_corpus
 
 
-def texts2corpus(args):
-    stopwords = []
-
-    print(f"Generating dictionary.")
-    contexts = get_contexts(args)
-    dictionary = Dictionary(contexts, prune_at=None)
-    vocab_size = len(dictionary)
-
-    # load allowlist from a predefined vocabulary
-    if args.vocab:
-        with open(args.vocab) as fp:
-            print(f'Loading vocab file {args.vocab}')
-            vocab_terms = sorted({line.strip() for line in fp.readlines()})
-            print(f'{len(vocab_terms)} terms loaded.')
-    else:
-        vocab_terms = []
-
-    if args.vocab_exclusive:
-        good_ids = [
-            dictionary.token2id[token] for token in vocab_terms
-            if token in dictionary.token2id
-        ]
-        dictionary.filter_tokens(good_ids=good_ids)
-        print(f"Removing {vocab_size - len(dictionary)} tokens not in predefined vocab.")
-    else:
-        if args.min_contexts:
-            dictionary.filter_extremes(
-                no_below=args.min_contexts, no_above=1., keep_n=None, keep_tokens=vocab_terms
-            )
-            print(
-                f"Removing {vocab_size - len(dictionary)} terms "
-                f"appearing in less than {args.min_contexts} contexts."
-            )
-            vocab_size = len(dictionary)
-
-        # filter noise (e.g. stopwords, special characters, infrequent words)
-        if stopwords:
-            bad_ids = [
-                dictionary.token2id[term] for term in stopwords
-                if term not in vocab_terms
-            ]
-            dictionary.filter_tokens(bad_ids=bad_ids)
-            print(f"Removing {len(dictionary) - vocab_size} stopword tokens.")
-            vocab_size = len(dictionary)
-
-        if args.min_word_freq > 1:
-            bad_ids = [
-                k for k, v in dictionary.cfs.items()
-                if v < args.min_word_freq and dictionary[k] not in vocab_terms
-            ]
-            dictionary.filter_tokens(bad_ids=bad_ids)
-            print(
-                f"Removing {vocab_size - len(dictionary)} terms with min frequency "
-                f"< {args.min_word_freq}."
-            )
-            vocab_size = len(dictionary)
-
-        if args.words_only:
-            re_word = re.compile(r"^[^\d\W]+$")
-            bad_ids = [
-                dictionary.token2id[term] for term in dictionary.token2id
-                if re_word.match(term) is None and term not in vocab_terms
-            ]
-            dictionary.filter_tokens(bad_ids=bad_ids)
-            print(f"Removing {vocab_size - len(dictionary)} tokens which are not regular words.")
-            vocab_size = len(dictionary)
-
-        if args.keep_n:
-            dictionary.filter_extremes(
-                no_below=1, no_above=1., keep_n=args.keep_n, keep_tokens=vocab_terms
-            )
-            print(f"Removing {vocab_size - len(dictionary)} terms to keep <= {args.keep_n} terms.")
-
-    dictionary.compactify()
-    print(f"Dictionary size: {len(dictionary)}")
-
-    try:
-        print(f"Generating bow corpus from {len(contexts)} contexts.")
-        bow_corpus = [dictionary.doc2bow(text) for text in contexts]
-    except TypeError:
-        print(f"Generating bow corpus from contexts.")
-        contexts = get_contexts(args)
-        bow_corpus = map(lambda text: dictionary.doc2bow(text), contexts)
-
-    return bow_corpus, dictionary
-
-
-def get_contexts(args):
-    # TODO: replace with corpus class lookup
-    read_fn = reader(args.corpus)
-    contexts = read_fn(
-        corpus=args.corpus,
-        chunk_size=args.window,
-        min_doc_size=args.min_doc_size,
-        tagged=False,
-        lowercase=args.lowercase,
-        lemmatized=args.lemmatized,
-        # tags_allowlist=args.pos_tags,  # TODO: implement
-        tags_blocklist=args.tags_blocklist,
-        make_if_not_cached=True,
-        persist_if_not_cached=not args.streamed,
-        version=args.version,
-        as_stream=args.streamed,
-    )
-    return contexts
-
-
 def normalize_weights(bow_corpus, dictionary, normalization, directory, file_name, epsilon=0.0):
     if normalization:
 
@@ -432,23 +325,7 @@ def normalize_weights(bow_corpus, dictionary, normalization, directory, file_nam
 
 
 def make_corpus(args, directory, file_name):
-    bow_corpus, dictionary = texts2corpus(args)
 
-    # - save dictionary -
-    file_path = directory / f'{file_name}.dict'
-    print(f"Saving {file_path}")
-    dictionary.save(str(file_path))
-
-    # - save dictionary frequencies as plain text -
-    dict_table = pd.Series(dictionary.token2id).to_frame(name='idx')
-    dict_table['freq'] = dict_table['idx'].map(dictionary.cfs.get)
-    dict_table = dict_table.reset_index()
-    dict_table = dict_table.set_index('idx', drop=True).rename({'index': 'term'}, axis=1)
-    dict_table = dict_table.sort_index()
-    file_path = directory / f'{file_name}_dict.csv'
-    print(f"Saving {file_path}")
-    # dictionary.save_as_text(file_path, sort_by_word=False)
-    dict_table.to_csv(file_path, sep='\t')
 
     # - save bow corpus -
     file_path = directory / f'{file_name}_bow.mm'
