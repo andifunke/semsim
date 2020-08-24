@@ -129,7 +129,7 @@ def calculate_semantic_diversity(terms, dictionary, corpus, document_vectors, mi
         dictionary = dictionary.token2id
 
     terms = sorted({term for term in terms})
-    term_ids = {dictionary[term]: [] for term in terms if dictionary.get(term)}
+    term_ids = {dictionary[term]: [] for term in terms if dictionary.get(term) is not None}
     for doc_id, doc in enumerate(tqdm(corpus)):
         for term_id, _ in doc:
             if term_id in term_ids:
