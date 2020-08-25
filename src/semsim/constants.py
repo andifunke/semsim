@@ -13,6 +13,7 @@ PACKAGE_DIR = Path(__file__).resolve().parent
 SRC_DIR = PACKAGE_DIR.parent
 PROJECT_DIR = SRC_DIR.parent
 DATA_DIR = PROJECT_DIR / 'data'
+TMP_DIR = PROJECT_DIR / 'tmp'
 OUT_DIR = DATA_DIR / 'out'
 NLP_DIR = OUT_DIR / 'nlp'
 META_DIR = OUT_DIR / 'meta'
