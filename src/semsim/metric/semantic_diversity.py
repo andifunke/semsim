@@ -3,7 +3,7 @@ import csv
 import re
 import warnings
 from pathlib import Path
-jn
+
 import numpy as np
 import pandas as pd
 from gensim.corpora import Dictionary, MmCorpus
