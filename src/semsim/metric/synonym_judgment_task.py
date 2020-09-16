@@ -138,5 +138,6 @@ def evaluate_dewac_d2v_vectors(vec_path):
 
 if __name__ == '__main__':
     #example_vectors_de()
-    # evaluate_dewac_d2v_vectors(vec_path=DATA_DIR / 'out/models/d2v_dewac')
+    evaluate_dewac_d2v_vectors(vec_path=DATA_DIR / 'out/models/d2v_dewac')
     evaluate_dewac_d2v_vectors(vec_path=DATA_DIR / 'out/models/d2v_dewac_vocab')
+    evaluate_dewac_d2v_vectors(vec_path=DATA_DIR / 'out/models/d2v_test_vocab_B')

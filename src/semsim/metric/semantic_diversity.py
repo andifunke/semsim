@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 from gensim.corpora import Dictionary, MmCorpus
 from gensim.matutils import corpus2dense
-from gensim.models import TfidfModel, LsiModel, LogEntropyModel
+from gensim.models import TfidfModel, LsiModel, LogEntropyModel, Doc2Vec
 from sklearn.metrics.pairwise import cosine_similarity
 from tqdm import tqdm
 
@@ -75,6 +75,8 @@ def parse_args() -> argparse.Namespace:
                         help="File path containing an dictionary (gensim or csv).")
     parser.add_argument('--tags-blocklist', nargs='*', type=str, required=False, default=[],
                         help='List of part-of-speech tags to remove from corpus.')
+    parser.add_argument('--d2v-model', type=str, required=False, default=None,
+                        help='Load document vectors and vocab from a pretrained doc2vec model.')
 
     parser.add_argument('--center', action='store_true', required=False)
     parser.add_argument('--no-center', dest='center', action='store_false', required=False)
@@ -109,6 +111,9 @@ def parse_args() -> argparse.Namespace:
 
     if args.make_corpus:
         args.make_lsi = True
+
+    if args.d2v_model:
+        args.normalization = None
 
     if args.streamed and args.normalization in ['entropy', 'log-entropy', 'log-entropy-norm']:
         print(f"WARNING: {args.normalization} does not fully support streamed corpora. "
@@ -489,7 +494,8 @@ def load_corpus(args, directory, file_name):
 
     # - load corpus -
     if args.normalization is None:
-        return load_bow_corpus(directory, file_name)
+        corpus = load_bow_corpus(directory, file_name)
+        return corpus, dictionary
 
     try:
         if args.normalization == 'tfidf':
@@ -562,7 +568,7 @@ def make_lsi(corpus, dictionary, args, directory, file_name):
 
     if center:
         print('Centering LSI document vectors.')
-        dv_mean = document_vectors.mean()
+        dv_mean = document_vectors.mean(axis=0)
         document_vectors -= dv_mean
 
     # --- save document vectors ---
@@ -595,7 +601,27 @@ def get_lsi_corpus(corpus, dictionary, args, directory, file_name):
             print(e)
             lsi_vectors = make_lsi(corpus, dictionary, args, directory, file_name)
 
-    return lsi_vectors
+    return lsi_vectors.to_numpy()
+
+
+def load_d2v_model(model_path, center, corpus):
+    print(f"Loading doc2vec model from {model_path}")
+    d2v = Doc2Vec.load(model_path)
+    document_vectors = d2v.docvecs.vectors_docs
+
+    if center:
+        print('Centering doc2vec document vectors.')
+        dv_mean = document_vectors.mean(axis=0)
+        document_vectors -= dv_mean
+
+    # TODO: nasty hack to fix id offset by 1
+    if len(document_vectors) == len(corpus) + 1:
+        document_vectors = document_vectors[1:]
+
+    assert len(document_vectors) == len(corpus), \
+        f"len(document_vectors) = {len(document_vectors)} != {len(corpus)} = len(corpus)"
+
+    return document_vectors
 
 
 def main():
@@ -614,9 +640,12 @@ def main():
         directory = SEMD_DIR
     directory.mkdir(exist_ok=True, parents=True)
 
-    # --- create a sparse corpus ---
+    # --- load or build a vector representation of a corpus ---
     corpus, dictionary = get_sparse_corpus(args, directory, file_name)
-    lsi_vectors = get_lsi_corpus(corpus, dictionary, args, directory, file_name)
+    if args.d2v_model:
+        document_vectors = load_d2v_model(args.d2v_model, args.center, corpus)
+    else:
+        document_vectors = get_lsi_corpus(corpus, dictionary, args, directory, file_name)
 
     # --- calculate SemD for vocabulary ---
     if args.terms:
@@ -634,7 +663,7 @@ def main():
             terms = dictionary.keys()
         project_suffix = f'_{args.project}' if args.project else ''
         file_path = directory / f'{file_name}{project_suffix}.semd'
-    semd_values = calculate_semantic_diversity(terms, dictionary, corpus, lsi_vectors.to_numpy())
+    semd_values = calculate_semantic_diversity(terms, dictionary, corpus, document_vectors)
 
     # - save SemD values for vocabulary -
     print(f"Saving SemD values to {file_path}")
