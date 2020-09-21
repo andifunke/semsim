@@ -19,6 +19,7 @@ META_DIR = OUT_DIR / 'meta'
 CACHE_DIR = OUT_DIR / 'cache'
 SEMD_DIR = OUT_DIR / 'SemD'
 CORPORA_DIR = DATA_DIR / 'corpora'
+TMP_DIR = PROJECT_DIR / 'tmp'
 
 # --- typing macros ---
 PathLike = Union[Path, str, os.PathLike]

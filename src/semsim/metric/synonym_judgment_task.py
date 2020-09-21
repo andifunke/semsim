@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 # coding: utf-8
 import pickle
+from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from gensim import models
@@ -26,35 +28,59 @@ sj_de = sj_de_full[['probe', 'target', 'foil1', 'foil2']]
 sj_de = sj_de[~sj_de.isna().any(axis=1)]
 
 
-def closest_match(terms, vectors, verbose=False):
-    """
-    Returns the index of the term closest to the first term in a list of words.
-    
-    Note that index 0 is taken as the probe and all words with index > 0 are tested.
-    """
-    
+def similarities(terms, vectors):
     terms = terms.to_list()
-    # print(terms)
-    try:
-        distances = vectors.distances(terms[0], terms[1:])
-        # print(distances)
-        min_dist = distances.argmin() + 1
-        return min_dist
-    except KeyError:
-        if verbose:
-            for term in terms:
-                if term not in vectors:
-                    print(f"missing in vectors: '{term}'")
-        return -1
+    probe = terms[0]
+    targets = terms[1:]
 
-    
-def synonym_judgement_accuracy(word_vectors, tests, target_idx=1):
-    pred = tests.apply(lambda x: closest_match(x, word_vectors), axis=1)
-    pred = pred[pred > 0]
-    correct = (pred == target_idx).sum()
+    try:
+        distances = vectors.distances(probe, targets)
+        sims = 1 - distances
+    except KeyError:
+        if probe not in vectors:
+            sims = [np.nan] * 3
+
+        else:
+            sims = []
+            for term in targets:
+                if term in vectors:
+                    similarity = vectors.similarity(probe, term)
+                    sims.append(similarity)
+                else:
+                    sims.append(np.nan)
+
+    return pd.Series(sims)
+
+
+def synonym_judgement_accuracy(word_vectors, tests, target_idx=0, file=None):
+    sim_cols = ['target_sim', 'foil1_sim', 'foil2_sim']
+    tests = tests.copy()
+
+    # calculating similarities
+    tests[sim_cols] = tests.apply(similarities, vectors=word_vectors, axis=1)
+
+    # default values for OOV tests
+    tests['pred'] = -1
+    tests['correct'] = np.nan
+
+    # predictions for in-vocab test
+    in_vocab = ~tests[sim_cols].isna().any(axis=1)
+    tests.loc[in_vocab, 'pred'] = tests.loc[in_vocab, sim_cols].apply(np.argmax, axis=1)
+    pred = tests.loc[in_vocab, 'pred']
+    tests.loc[in_vocab, 'correct'] = (pred == target_idx)
+
+    # calculating accuracy
+    correct = tests.loc[in_vocab, 'correct'].sum()
     acc = correct / len(pred)
-    print(f"Accuracy: {round(acc, 3)}")
+    print(f"Accuracy: {acc:.03f}")
     print(f"Number of tests omitted due to unknown words: {len(tests) - len(pred)}")
+
+    # writing results
+    if file is not None:
+        file = Path(file)
+        file = file.parent / f'{file.name}_acc{acc:.03f}.sjt'
+        print(f"Saving SJT predictions to {file}")
+        tests.to_csv(file, sep='\t')
 
 
 # -- evaluate word vectors on SJT --
@@ -118,26 +144,29 @@ def example_vectors_de():
     op_lsi = models.KeyedVectors.load_word2vec_format(str(file))
     synonym_judgement_accuracy(op_lsi, sj_de)
 
-    file = DATA_DIR / 'out/SemD/DEWAC_1000_40k_v2/dewac_lsi_word_vectors.vec'
+
+def evaluate_lsi_vectors(vec_path):
+    file = Path(vec_path)
     print(f"Loading {file}")
     op_lsi = models.KeyedVectors.load_word2vec_format(str(file))
-    synonym_judgement_accuracy(op_lsi, sj_de)
+    synonym_judgement_accuracy(op_lsi, sj_de, file=file)
 
 
-def evaluate_dewac_d2v_vectors(vec_path):
+def evaluate_d2v_vectors(vec_path):
 
     for file in sorted(vec_path.iterdir()):
         try:
             d2v = Doc2Vec.load(str(file))
             print(f'{file} loaded')
-            synonym_judgement_accuracy(d2v.wv, sj_de)
+            synonym_judgement_accuracy(d2v.wv, sj_de, file=file)
             print()
         except pickle.UnpicklingError:
             pass
 
 
 if __name__ == '__main__':
-    #example_vectors_de()
-    evaluate_dewac_d2v_vectors(vec_path=DATA_DIR / 'out/models/d2v_dewac')
-    evaluate_dewac_d2v_vectors(vec_path=DATA_DIR / 'out/models/d2v_dewac_vocab')
-    evaluate_dewac_d2v_vectors(vec_path=DATA_DIR / 'out/models/d2v_test_vocab_B')
+    # example_vectors_de()
+    # evaluate_d2v_vectors(DATA_DIR / 'out/models/d2v_dewac')
+    # evaluate_dewac_d2v_vectors(DATA_DIR / 'out/models/d2v_dewac_vocab')
+    # evaluate_d2v_vectors(DATA_DIR / 'out/models/d2v_test_vocab_B')
+    evaluate_lsi_vectors(DATA_DIR / 'out/SemD/DEWAC_1000_40k_v2/dewac_lsi_word_vectors.vec')
