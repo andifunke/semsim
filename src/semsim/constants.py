@@ -17,7 +17,7 @@ OUT_DIR = DATA_DIR / 'out'
 NLP_DIR = OUT_DIR / 'nlp'
 META_DIR = OUT_DIR / 'meta'
 CACHE_DIR = OUT_DIR / 'cache'
-SEMD_DIR = OUT_DIR / 'SemD'
+SEMD_DIR = DATA_DIR / 'SemD'
 CORPORA_DIR = DATA_DIR / 'corpora'
 TMP_DIR = PROJECT_DIR / 'tmp'
 

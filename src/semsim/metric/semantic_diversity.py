@@ -7,8 +7,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from gensim.corpora import Dictionary, MmCorpus
-from gensim.matutils import corpus2dense
+from gensim.matutils import corpus2dense, corpus2csc
 from gensim.models import TfidfModel, LsiModel, LogEntropyModel, Doc2Vec
+from sklearn.decomposition import TruncatedSVD
 from sklearn.metrics.pairwise import cosine_similarity
 from tqdm import tqdm
 
@@ -540,6 +541,27 @@ def get_sparse_corpus(args, directory, file_name):
             corpus, dictionary = make_corpus(args, directory, file_name)
 
     return corpus, dictionary
+
+
+def lsi_projection_sklearn(corpus, nb_topics=300):
+    csc_matrix = corpus2csc(corpus, dtype=np.float32).T
+    print(f"Size of train_set={csc_matrix.shape[0]}")
+
+    # --- train ---
+    print(f"Training LSI model with {nb_topics} topics")
+    svd = TruncatedSVD(n_components=nb_topics)
+    svdMatrix = svd.fit_transform(csc_matrix)
+
+    # --- get vectors ---
+    # term_vectors = svd.projection.u
+    # term_vectors = pd.DataFrame(term_vectors, index=dictionary.token2id.keys())
+
+    term_vectors = None
+    document_vectors = svdMatrix
+    # document_vectors = corpus2dense(lsi_corpus, 300, num_docs=len(corpus)).T
+    document_vectors = pd.DataFrame(document_vectors)
+
+    return svd, document_vectors, term_vectors
 
 
 def make_lsi(corpus, dictionary, args, directory, file_name):
