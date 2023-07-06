@@ -13,11 +13,18 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
-## Data and Models
+## Corpora
 
 For downloading the BNC and DeWaC corpora visit:
 
 - [BNC](http://www.natcorp.ox.ac.uk/)
 - [DeWaC](https://wacky.sslmit.unibo.it/)
 
-In additional download the content from this [Google Drive folder](https://drive.google.com/drive/folders/10X8mn6J6REUH-wdxkNZ6BxpW7U9MpzN0) and extract it do `semsim/data`.
+## Models
+
+In addition, download models and evaluation content from this [Google Drive folder](https://drive.google.com/drive/folders/10X8mn6J6REUH-wdxkNZ6BxpW7U9MpzN0) and extract it do `semsim/data`.
+
+The models referenced in [Bechtold et al. 2023](https://psyarxiv.com/grwa3/) are located in
+
+- `semsin/data/SemD/DEWAC_1000_40k_v2` (LSI based word and document vectors + SemD values)
+- `semsin/data/SemD/DEWAC_1000_40k_d2v` (doc2vec based word and document vectors + SemD values)
