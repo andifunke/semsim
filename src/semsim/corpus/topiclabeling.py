@@ -1,4 +1,4 @@
-# coding: utf-8
+#!/usr/bin/env python3
 
 """Converts corpora from the topic-labeling package format to the simple semsim format."""
 
@@ -20,8 +20,25 @@ tqdm.pandas()
 GOOD_IDS_DEWAC = None
 GOOD_IDS_DEWIK = None
 TAGS = {
-    'ADJ', 'ADV', 'INTJ', 'NOUN', 'PROPN', 'VERB', 'ADP', 'AUX', 'CCONJ', 'CONJ', 'DET', 'NUM',
-    'PART', 'PRON', 'SCONJ',  'PUNCT', 'SYM', 'X', 'SPACE'
+    "ADJ",
+    "ADV",
+    "INTJ",
+    "NOUN",
+    "PROPN",
+    "VERB",
+    "ADP",
+    "AUX",
+    "CCONJ",
+    "CONJ",
+    "DET",
+    "NUM",
+    "PART",
+    "PRON",
+    "SCONJ",
+    "PUNCT",
+    "SYM",
+    "X",
+    "SPACE",
 }
 
 
@@ -35,25 +52,37 @@ def parse_args() -> argparse.Namespace:
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('-c', '--corpus', type=str, required=True,
-                        help="ID or unique prefix of a topic-labeling corpus.")
-    parser.add_argument('-w', '--window', type=int, required=False, default=1000)
-    parser.add_argument('-m', '--min-doc-size', type=int, required=False, default=1,
-                        help="Discard all documents/chunk smaller than --min-doc-size.")
-    parser.add_argument('-d', '--directory', type=str, required=False, default=NLP_DIR)
-    parser.add_argument('--tags-blocklist', nargs='*', type=str, required=False, default=[],
-                        choices=TAGS)
+    parser.add_argument(
+        "-c",
+        "--corpus",
+        type=str,
+        required=True,
+        help="ID or unique prefix of a topic-labeling corpus.",
+    )
+    parser.add_argument("-w", "--window", type=int, required=False, default=1000)
+    parser.add_argument(
+        "-m",
+        "--min-doc-size",
+        type=int,
+        required=False,
+        default=1,
+        help="Discard all documents/chunk smaller than --min-doc-size.",
+    )
+    parser.add_argument("-d", "--directory", type=str, required=False, default=NLP_DIR)
+    parser.add_argument(
+        "--tags-blocklist", nargs="*", type=str, required=False, default=[], choices=TAGS
+    )
 
-    parser.add_argument('--lowercase', action='store_true', required=False)
-    parser.add_argument('--no-lowercase', dest='lowercase', action='store_false', required=False)
+    parser.add_argument("--lowercase", action="store_true", required=False)
+    parser.add_argument("--no-lowercase", dest="lowercase", action="store_false", required=False)
     parser.set_defaults(lowercase=False)
 
-    parser.add_argument('--tagged', action='store_true', required=False)
-    parser.add_argument('--no-tagged', dest='tagged', action='store_false', required=False)
+    parser.add_argument("--tagged", action="store_true", required=False)
+    parser.add_argument("--no-tagged", dest="tagged", action="store_false", required=False)
     parser.set_defaults(tagged=False)
 
-    parser.add_argument('--lemmatized', action='store_true', required=False)
-    parser.add_argument('--no-lemmatized', dest='lemmatized', action='store_false', required=False)
+    parser.add_argument("--lemmatized", action="store_true", required=False)
+    parser.add_argument("--no-lemmatized", dest="lemmatized", action="store_false", required=False)
     parser.set_defaults(lemmatized=False)
 
     args = parser.parse_args()
@@ -64,7 +93,7 @@ def parse_args() -> argparse.Namespace:
 def preprocess_dewac(df):
     global GOOD_IDS_DEWAC
     if GOOD_IDS_DEWAC is None:
-        GOOD_IDS_DEWAC = pd.read_pickle(META_DIR / 'dewac_good_ids.pickle')
+        GOOD_IDS_DEWAC = pd.read_pickle(META_DIR / "dewac_good_ids.pickle")
     df = df[df.hash.isin(GOOD_IDS_DEWAC.index)]
 
     return df
@@ -73,7 +102,7 @@ def preprocess_dewac(df):
 def preprocess_dewiki(df):
     global GOOD_IDS_DEWIK
     if GOOD_IDS_DEWIK is None:
-        GOOD_IDS_DEWIK = pd.read_pickle(META_DIR / 'dewiki_good_ids.pickle')
+        GOOD_IDS_DEWIK = pd.read_pickle(META_DIR / "dewiki_good_ids.pickle")
     df = df[df.hash.isin(GOOD_IDS_DEWIK.index)]
 
     return df
@@ -81,15 +110,16 @@ def preprocess_dewiki(df):
 
 # TODO: wrap in class and move corpus parameter to init
 
+
 def stream_corpus(
-        corpus: str,
-        chunk_size: int = None,
-        min_doc_size: int = None,
-        tagged: bool = False,
-        lowercase: bool = False,
-        lemmatized: bool = True,
-        tags_blocklist: list = None,
-        directory: PathLike = NLP_DIR,
+    corpus: str,
+    chunk_size: int = None,
+    min_doc_size: int = None,
+    tagged: bool = False,
+    lowercase: bool = False,
+    lemmatized: bool = True,
+    tags_blocklist: list = None,
+    directory: PathLike = NLP_DIR,
 ) -> Generator[List[Union[str, Tuple[str, str]]], None, None]:
     """
     Parses a corpus in the topic-labeling package format and streams as list of strings or tuples.
@@ -118,30 +148,32 @@ def stream_corpus(
 
     # filter files for certain prefixes
     pattern = re.compile(corpus, re.IGNORECASE)
-    files = sorted([
-        f for f in directory.iterdir()
-        if f.is_file() and pattern.match(f.name)
-    ])
+    files = sorted([f for f in directory.iterdir() if f.is_file() and pattern.match(f.name)])
     if not files:
         raise FileNotFoundError(f"Cannot find corpus for prefix '{corpus}' in {directory}")
 
     for file in files:
-        corpus_name = file.name.split('_nlp.')[0]
-        text_col = 'token' if lemmatized else 'text'
+        corpus_name = file.name.split("_nlp.")[0]
+        text_col = "token" if lemmatized else "text"
         print(f"reading from {file}")
         df = pd.read_csv(
-            file, sep='\t', header=0, usecols=['hash', text_col, 'POS'],
-            keep_default_na=False, dtype={'hash': int, 'token': str, 'pos': 'category'},
-            lineterminator='\n', quoting=csv.QUOTE_NONE,
+            file,
+            sep="\t",
+            header=0,
+            usecols=["hash", text_col, "POS"],
+            keep_default_na=False,
+            dtype={"hash": int, "token": str, "pos": "category"},
+            lineterminator="\n",
+            quoting=csv.QUOTE_NONE,
         )
-        df.columns = ['hash', 'token', 'pos']
+        df.columns = ["hash", "token", "pos"]
 
-        if corpus_name.startswith('dewac'):
+        if corpus_name.startswith("dewac"):
             df = preprocess_dewac(df)
-        elif corpus_name.startswith('dewiki'):
+        elif corpus_name.startswith("dewiki"):
             df = preprocess_dewiki(df)
 
-        df = df.groupby('hash', sort=False)
+        df = df.groupby("hash", sort=False)
 
         for _, doc in tqdm(df, total=len(df)):
             if tags_blocklist:
@@ -157,7 +189,7 @@ def stream_corpus(
             if chunk_size:
                 idx = 0
                 while idx < len(doc):
-                    chunk = doc[idx:idx + chunk_size]
+                    chunk = doc[idx : idx + chunk_size]
                     idx += chunk_size
                     if len(chunk) >= min_doc_size:
                         yield chunk
@@ -173,12 +205,15 @@ def read_corpus(*args, **kwargs):
 def infer_full_corpus_name(corpus: str, directory: PathLike = None):
     if directory:
         directory = Path(directory)
-        prefixes = r'^(' + '|'.join(corpus) + r').'
+        prefixes = r"^(" + "|".join(corpus) + r")."
         pattern = re.compile(prefixes)
-        files = sorted([
-            f.name.split('_nlp.')[0] for f in directory.iterdir()
-            if f.is_file() and pattern.match(f.name)
-        ])
+        files = sorted(
+            [
+                f.name.split("_nlp.")[0]
+                for f in directory.iterdir()
+                if f.is_file() and pattern.match(f.name)
+            ]
+        )
         all_equal = all(f == files[0] for f in files)
         corpus = files[0] if all_equal else corpus
 
@@ -186,51 +221,51 @@ def infer_full_corpus_name(corpus: str, directory: PathLike = None):
 
 
 def infer_file_path(
-        corpus: str,
-        chunk_size: int = None,
-        min_doc_size: int = None,
-        tagged: bool = False,
-        lowercase: bool = False,
-        lemmatized: bool = True,
-        tags_blocklist: list = None,
-        with_suffix: bool = True,
+    corpus: str,
+    chunk_size: int = None,
+    min_doc_size: int = None,
+    tagged: bool = False,
+    lowercase: bool = False,
+    lemmatized: bool = True,
+    tags_blocklist: list = None,
+    with_suffix: bool = True,
 ) -> PathLike:
     """Returns a canonical file path for the given corpus and arguments."""
 
-    cs_suffix = f'_cs{chunk_size}' if isinstance(chunk_size, int) and chunk_size > 0 else ''
-    tagged_suffix = '_tagged' if tagged else ''
-    lowercase_suffix = '_lc' if lowercase else ''
-    lemmatized_suffix = '_lemma' if lemmatized else ''
-    filtered_suffix = '_filtered' if tags_blocklist else ''  # TODO: read actual tags from JSON
+    cs_suffix = f"_cs{chunk_size}" if isinstance(chunk_size, int) and chunk_size > 0 else ""
+    tagged_suffix = "_tagged" if tagged else ""
+    lowercase_suffix = "_lc" if lowercase else ""
+    lemmatized_suffix = "_lemma" if lemmatized else ""
+    filtered_suffix = "_filtered" if tags_blocklist else ""  # TODO: read actual tags from JSON
     min_doc_size_suffix = (
-        f'_minsz{min_doc_size}' if isinstance(min_doc_size, int) and min_doc_size > 0 else ''
+        f"_minsz{min_doc_size}" if isinstance(min_doc_size, int) and min_doc_size > 0 else ""
     )
-    file_suffix = '.txt' if with_suffix else ''
+    file_suffix = ".txt" if with_suffix else ""
     file_name = (
-        f'{corpus}'
-        f'{cs_suffix}'
-        f'{min_doc_size_suffix}'
-        f'{tagged_suffix}'
-        f'{lowercase_suffix}'
-        f'{lemmatized_suffix}'
-        f'{filtered_suffix}'
-        f'{file_suffix}'
+        f"{corpus}"
+        f"{cs_suffix}"
+        f"{min_doc_size_suffix}"
+        f"{tagged_suffix}"
+        f"{lowercase_suffix}"
+        f"{lemmatized_suffix}"
+        f"{filtered_suffix}"
+        f"{file_suffix}"
     )
-    file_path = CACHE_DIR / 'corpora' / corpus / file_name
+    file_path = CACHE_DIR / "corpora" / corpus / file_name
 
     return file_path
 
 
 def persist_transformation(
-        corpus: str,
-        chunk_size: int = None,
-        min_doc_size: int = None,
-        tagged: bool = False,
-        lowercase: bool = False,
-        lemmatized: bool = True,
-        tags_blocklist: list = None,
-        directory: PathLike = None,
-        documents: Iterator[List] = None,
+    corpus: str,
+    chunk_size: int = None,
+    min_doc_size: int = None,
+    tagged: bool = False,
+    lowercase: bool = False,
+    lemmatized: bool = True,
+    tags_blocklist: list = None,
+    directory: PathLike = None,
+    documents: Iterator[List] = None,
 ):
     """
     Parses documents from the original BNC XML format and writes it as plain text to a file.
@@ -278,16 +313,16 @@ def persist_transformation(
 
     # - write corpus as plain text -
     out_path.parent.mkdir(exist_ok=True, parents=True)
-    with open(out_path, 'w') as fp:
+    with open(out_path, "w") as fp:
         print(f"Writing to {out_path}")
         i = None
         for i, doc in enumerate(documents):
-            doc = ' '.join(doc).replace('\n', '<P>')
-            fp.write(doc + '\n')
-        print(f'{i} lines written.')
+            doc = " ".join(doc).replace("\n", "<P>")
+            fp.write(doc + "\n")
+        print(f"{i} lines written.")
 
     # - write arguments as meta data -
-    with open(out_path.with_suffix('.json'), 'w') as fp:
+    with open(out_path.with_suffix(".json"), "w") as fp:
         args = dict(
             directory=str(directory),
             chunk_size=chunk_size,
@@ -301,17 +336,17 @@ def persist_transformation(
 
 
 def load_from_cache(
-        corpus: str,
-        chunk_size: int = None,
-        min_doc_size: int = None,
-        tagged: bool = False,
-        lowercase: bool = False,
-        lemmatized: bool = True,
-        tags_blocklist: list = None,
-        make_if_not_cached: bool = True,
-        persist_if_not_cached: bool = False,
-        version: str = None,
-        as_stream: bool = False,
+    corpus: str,
+    chunk_size: int = None,
+    min_doc_size: int = None,
+    tagged: bool = False,
+    lowercase: bool = False,
+    lemmatized: bool = True,
+    tags_blocklist: list = None,
+    make_if_not_cached: bool = True,
+    persist_if_not_cached: bool = False,
+    version: str = None,
+    as_stream: bool = False,
 ) -> List[List]:
     """
 
@@ -334,7 +369,7 @@ def load_from_cache(
     """
     as_stream &= not persist_if_not_cached
 
-    out_path = CACHE_DIR / 'corpora' / corpus / f'{version}.txt'
+    out_path = CACHE_DIR / "corpora" / corpus / f"{version}.txt"
     if not out_path.exists():
         out_path = infer_file_path(
             corpus=corpus,
@@ -352,7 +387,7 @@ def load_from_cache(
         if not out_path.exists():
             raise FileNotFoundError(f"Path {out_path} does not exists.")
         fp = open(out_path)
-        docs = map(lambda x: x.strip().split(), tqdm(fp, unit=' documents'))
+        docs = map(lambda x: x.strip().split(), tqdm(fp, unit=" documents"))
         if not as_stream:
             print(f"Loading {out_path}")
             docs = list(docs)
@@ -394,7 +429,7 @@ def load_from_cache(
                     tagged=tagged,
                     lowercase=lowercase,
                     lemmatized=lemmatized,
-                    tags_blocklist=tags_blocklist
+                    tags_blocklist=tags_blocklist,
                 )
         else:
             docs = None
@@ -402,8 +437,8 @@ def load_from_cache(
     return docs
 
 
-def example(args, example_='stream'):
-    if example_ == 'stream':
+def example(args, example_="stream"):
+    if example_ == "stream":
         docs = stream_corpus(
             corpus=args.corpus,
             chunk_size=args.window,
@@ -416,7 +451,7 @@ def example(args, example_='stream'):
         )
         for doc in docs:
             print(len(doc), doc[:50])
-    elif example_ == 'write':
+    elif example_ == "write":
         persist_transformation(
             corpus=args.corpus,
             chunk_size=args.window,
@@ -427,7 +462,7 @@ def example(args, example_='stream'):
             tags_blocklist=args.tags_blocklist,
             directory=args.directory,
         )
-    elif example_ == 'load':
+    elif example_ == "load":
         docs = load_from_cache(
             corpus=args.corpus,
             chunk_size=args.window,
@@ -440,7 +475,7 @@ def example(args, example_='stream'):
         print(docs[:10])
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     args_ = parse_args()
     print(vars(args_))
-    example(args_, 'write')
+    example(args_, "write")
