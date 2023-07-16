@@ -1,4 +1,5 @@
 # --- corpus getter lookup ---
+
 from semsim.corpus.bnc import load_from_cache as load_bnc
 from semsim.corpus.topiclabeling import load_from_cache as load_tl
 

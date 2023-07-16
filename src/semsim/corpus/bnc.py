@@ -2,17 +2,16 @@
 
 import argparse
 import json
+from pathlib import Path
 from typing import Generator, List, Union, Tuple
 
 from nltk.corpus.reader.bnc import BNCCorpusReader
 from tqdm import tqdm
 
-from semsim.constants import CACHE_DIR, CORPORA_DIR, PathLike
+from semsim.constants import PathLike, CORPORA_DIR, get_out_dir
 
-BNC_CORPUS_ID = "bnc"
-BNC_DIR = CORPORA_DIR / "BNC" / "ota_20.500.12024_2554" / "download" / "Texts"
+BNC_CORPUS_ID = "BNC"
 
-# TODO: map BNC POS-tags to universal tag set
 TAGS = {
     "SUBST",
     "PUR",
@@ -41,26 +40,50 @@ def parse_args() -> argparse.Namespace:
 
     parser = argparse.ArgumentParser()
 
-    parser.add_argument("-w", "--window", type=int, required=False, default=1000)
+    parser.add_argument(
+        "-i",
+        "--input_dir",
+        type=Path,
+        default=CORPORA_DIR / BNC_CORPUS_ID / "ota_20.500.12024_2554",
+        help="Path to corpus directory (`download/Texts/.`).",
+    )
+    parser.add_argument(
+        "-w",
+        "--window",
+        type=int,
+        default=1000,
+        help="Split documents into chunks of size `--window`.",
+    )
     parser.add_argument(
         "-m",
         "--min-doc-size",
         type=int,
-        required=False,
         default=1,
-        help="Discard all documents/chunk smaller than --min-doc-size.",
+        help="Discard all documents/chunks smaller than --min-doc-size.",
     )
-    parser.add_argument("-d", "--directory", type=str, required=False)
     parser.add_argument(
-        "--tags-blocklist", nargs="*", type=str, required=False, default=[], choices=TAGS
+        "--tags-blocklist",
+        nargs="*",
+        type=str,
+        default=[],
+        choices=TAGS,
+        help="Remove all tokens for the given part-of-speech tags.",
     )
 
-    parser.add_argument("--lowercase", action="store_true", required=False)
-    parser.add_argument("--no-lowercase", dest="lowercase", action="store_false", required=False)
+    parser.add_argument(
+        "--lowercase",
+        action="store_true",
+        help="Apply lower casing to the corpus text.",
+    )
+    parser.add_argument("--no-lowercase", dest="lowercase", action="store_false")
     parser.set_defaults(lowercase=True)
 
-    parser.add_argument("--tagged", action="store_true", required=False)
-    parser.add_argument("--no-tagged", dest="tagged", action="store_false", required=False)
+    parser.add_argument(
+        "--tagged",
+        action="store_true",
+        help="Items in the corpus will be tuples in the format `(token, pos_tag)`.",
+    )
+    parser.add_argument("--no-tagged", dest="tagged", action="store_false")
     parser.set_defaults(tagged=False)
 
     args = parser.parse_args()
@@ -68,17 +91,14 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-# TODO: wrap in class and move corpus parameter to init
-
-
 def stream_corpus(
+    directory: PathLike = None,
     corpus: str = BNC_CORPUS_ID,
     chunk_size: int = None,
     min_doc_size: int = None,
     tagged: bool = False,
     lowercase: bool = False,
     tags_blocklist: list = None,
-    directory: PathLike = None,
 ) -> Generator[List[Union[str, Tuple[str, str]]], None, None]:
     """
     Parses documents from the original BNC XML corpus and streams as list of strings or tuples.
@@ -95,12 +115,12 @@ def stream_corpus(
 
     :returns: Generator that yields documents/contexts as lists of tokens.
     """
-    # TODO: Benchmark structured data formats for strings/documents/tokens
 
-    directory = BNC_DIR if directory is None else directory
     print(f"Streaming BNC corpus from {directory}")
-    bnc = BNCCorpusReader(root=str(directory), fileids=r"[A-K]/\w*/\w*\.xml")
-
+    bnc = BNCCorpusReader(
+        root=str(directory / "download" / "Texts"),
+        fileids=r"[A-K]/\w*/\w*\.xml",
+    )
     read_fn = bnc.tagged_words if tagged else bnc.words
     filter_fn = lambda x: True
     map_fn = lambda x: x
@@ -158,12 +178,16 @@ def infer_file_path(
 ) -> PathLike:
     """Returns a canonical file path for the given corpus and arguments."""
 
-    cs_suffix = f"_cs{chunk_size}" if isinstance(chunk_size, int) and chunk_size > 0 else ""
+    cs_suffix = (
+        f"_cs{chunk_size}" if isinstance(chunk_size, int) and chunk_size > 0 else ""
+    )
     tagged_suffix = "_tagged" if tagged else ""
     lowercase_suffix = "_lc" if lowercase else ""
     filtered_suffix = "_filtered" if tags_blocklist else ""
     min_doc_size_suffix = (
-        f"_minsz{min_doc_size}" if isinstance(min_doc_size, int) and min_doc_size > 0 else ""
+        f"_minsz{min_doc_size}"
+        if isinstance(min_doc_size, int) and min_doc_size > 0
+        else ""
     )
     file_suffix = ".txt" if with_suffix else ""
     file_name = (
@@ -175,7 +199,7 @@ def infer_file_path(
         f"{filtered_suffix}"
         f"{file_suffix}"
     )
-    file_path = CACHE_DIR / "corpora" / corpus / file_name
+    file_path = get_out_dir(corpus, make=True) / file_name
 
     return file_path
 
@@ -239,7 +263,7 @@ def persist_transformation(
     # - write arguments as meta data -
     with open(out_path.with_suffix(".json"), "w") as fp:
         args = dict(
-            directory=directory,
+            directory=str(directory),
             chunk_size=chunk_size,
             min_doc_size=min_doc_size,
             tagged=tagged,
@@ -280,7 +304,7 @@ def load_from_cache(
     :return: List of lists of tokens.
     """
 
-    out_path = CACHE_DIR / "corpora" / BNC_CORPUS_ID / f"{version}.txt"
+    out_path = get_out_dir(corpus) / f"{version}.txt"
     if not out_path.exists():
         out_path = infer_file_path(
             corpus=corpus,
@@ -290,13 +314,12 @@ def load_from_cache(
             lowercase=lowercase,
             tags_blocklist=tags_blocklist,
         )
-    # TODO: read meta data first and verify identity of tags_blocklist
 
     try:
         with open(out_path, "r") as fp:
             print(f"Loading {out_path}")
             if as_stream:
-                raise NotImplementedError  ## TODO
+                raise NotImplementedError
             else:
                 docs = [c.strip().split() for c in fp.readlines()]
     except FileNotFoundError:
@@ -339,23 +362,23 @@ def load_from_cache(
 def example(args, example_="stream"):
     if example_ == "stream":
         docs = stream_corpus(
+            directory=args.input_dir,
             chunk_size=args.window,
             min_doc_size=args.min_doc_size,
             tagged=args.tagged,
             lowercase=args.lowercase,
             tags_blocklist=args.tags_blocklist,
-            directory=args.directory,
         )
         for doc in docs:
             print(len(doc), doc[:50])
     elif example_ == "write":
         persist_transformation(
+            directory=args.input_dir,
             chunk_size=args.window,
             min_doc_size=args.min_doc_size,
             tagged=args.tagged,
             lowercase=args.lowercase,
             tags_blocklist=args.tags_blocklist,
-            directory=args.directory,
         )
     elif example_ == "load":
         docs = load_from_cache(

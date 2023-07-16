@@ -19,7 +19,6 @@ from semsim import DATASET_STREAMS
 from semsim.constants import SEMD_DIR
 from semsim.corpus.dataio import reader
 
-# TODO: remove when tqdm fully supports pandas >= 0.25
 warnings.simplefilter(action="ignore", category=FutureWarning)
 tqdm.pandas()
 np.random.seed(42)
@@ -142,23 +141,37 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument("--center", action="store_true", required=False)
-    parser.add_argument("--no-center", dest="center", action="store_false", required=False)
+    parser.add_argument(
+        "--no-center", dest="center", action="store_false", required=False
+    )
     parser.set_defaults(center=True)
 
     parser.add_argument("--lowercase", action="store_true", required=False)
-    parser.add_argument("--no-lowercase", dest="lowercase", action="store_false", required=False)
+    parser.add_argument(
+        "--no-lowercase", dest="lowercase", action="store_false", required=False
+    )
     parser.set_defaults(lowercase=False)
 
     parser.add_argument("--lemmatized", action="store_true", required=False)
-    parser.add_argument("--no-lemmatized", dest="lemmatized", action="store_false", required=False)
+    parser.add_argument(
+        "--no-lemmatized", dest="lemmatized", action="store_false", required=False
+    )
     parser.set_defaults(lemmatized=False)
 
-    parser.add_argument("--make-corpus", dest="make_corpus", action="store_true", required=False)
-    parser.add_argument("--load-corpus", dest="make_corpus", action="store_false", required=False)
+    parser.add_argument(
+        "--make-corpus", dest="make_corpus", action="store_true", required=False
+    )
+    parser.add_argument(
+        "--load-corpus", dest="make_corpus", action="store_false", required=False
+    )
     parser.set_defaults(make_corpus=False)
 
-    parser.add_argument("--make-lsi", dest="make_lsi", action="store_true", required=False)
-    parser.add_argument("--load-lsi", dest="make_lsi", action="store_false", required=False)
+    parser.add_argument(
+        "--make-lsi", dest="make_lsi", action="store_true", required=False
+    )
+    parser.add_argument(
+        "--load-lsi", dest="make_lsi", action="store_false", required=False
+    )
     parser.set_defaults(make_lsi=False)
 
     parser.add_argument(
@@ -166,7 +179,8 @@ def parse_args() -> argparse.Namespace:
         dest="streamed",
         action="store_true",
         required=False,
-        help="Recommended for large corpora and limited memory capacity." "May be slower.",
+        help="Recommended for large corpora and limited memory capacity."
+        "May be slower.",
     )
 
     parser.set_defaults(streamed=False)
@@ -182,7 +196,11 @@ def parse_args() -> argparse.Namespace:
     if args.d2v_model:
         args.normalization = None
 
-    if args.streamed and args.normalization in ["entropy", "log-entropy", "log-entropy-norm"]:
+    if args.streamed and args.normalization in [
+        "entropy",
+        "log-entropy",
+        "log-entropy-norm",
+    ]:
         print(
             f"WARNING: {args.normalization} does not fully support streamed corpora. "
             "The normalization may require more memory than expected."
@@ -196,14 +214,18 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def calculate_semantic_diversity(terms, dictionary, corpus, document_vectors, min_contexts=2):
+def calculate_semantic_diversity(
+    terms, dictionary, corpus, document_vectors, min_contexts=2
+):
     print("Calculate Semantic Diversity.")
 
     if isinstance(dictionary, Dictionary):
         dictionary = dictionary.token2id
 
     terms = sorted({term for term in terms})
-    term_ids = {dictionary[term]: [] for term in terms if dictionary.get(term) is not None}
+    term_ids = {
+        dictionary[term]: [] for term in terms if dictionary.get(term) is not None
+    }
     for doc_id, doc in enumerate(tqdm(corpus)):
         for term_id, _ in doc:
             if term_id in term_ids:
@@ -253,7 +275,9 @@ def lsi_projection(corpus, dictionary, nb_topics=300, cache_in_memory=False):
 
     # --- train ---
     print(f"Training LSI model with {nb_topics} topics")
-    model = LsiModel(corpus=corpus, num_topics=nb_topics, id2word=dictionary, dtype=np.float32)
+    model = LsiModel(
+        corpus=corpus, num_topics=nb_topics, id2word=dictionary, dtype=np.float32
+    )
 
     # --- get vectors ---
     term_vectors = model.projection.u
@@ -313,7 +337,6 @@ def calc_entropy_normalization(corpus, word_entropies, epsilon=0.0):
 def entropy_transform(corpus, dictionary, directory, epsilon=0.0, use_cache=True):
     print("Applying entropy transform")
 
-    # TODO: individualize file name based on args
     file_name = "entropy_transform.csv"
     file_path = directory / file_name
 
@@ -395,14 +418,21 @@ def texts2corpus(args):
 
     if args.vocab_exclusive:
         good_ids = [
-            dictionary.token2id[token] for token in vocab_terms if token in dictionary.token2id
+            dictionary.token2id[token]
+            for token in vocab_terms
+            if token in dictionary.token2id
         ]
         dictionary.filter_tokens(good_ids=good_ids)
-        print(f"Removing {vocab_size - len(dictionary)} tokens not in predefined vocab.")
+        print(
+            f"Removing {vocab_size - len(dictionary)} tokens not in predefined vocab."
+        )
     else:
         if args.min_contexts:
             dictionary.filter_extremes(
-                no_below=args.min_contexts, no_above=1.0, keep_n=None, keep_tokens=vocab_terms
+                no_below=args.min_contexts,
+                no_above=1.0,
+                keep_n=None,
+                keep_tokens=vocab_terms,
             )
             print(
                 f"Removing {vocab_size - len(dictionary)} terms "
@@ -412,7 +442,11 @@ def texts2corpus(args):
 
         # filter noise (e.g. stopwords, special characters, infrequent words)
         if stopwords:
-            bad_ids = [dictionary.token2id[term] for term in stopwords if term not in vocab_terms]
+            bad_ids = [
+                dictionary.token2id[term]
+                for term in stopwords
+                if term not in vocab_terms
+            ]
             dictionary.filter_tokens(bad_ids=bad_ids)
             print(f"Removing {len(dictionary) - vocab_size} stopword tokens.")
             vocab_size = len(dictionary)
@@ -438,14 +472,18 @@ def texts2corpus(args):
                 if re_word.match(term) is None and term not in vocab_terms
             ]
             dictionary.filter_tokens(bad_ids=bad_ids)
-            print(f"Removing {vocab_size - len(dictionary)} tokens which are not regular words.")
+            print(
+                f"Removing {vocab_size - len(dictionary)} tokens which are not regular words."
+            )
             vocab_size = len(dictionary)
 
         if args.keep_n:
             dictionary.filter_extremes(
                 no_below=1, no_above=1.0, keep_n=args.keep_n, keep_tokens=vocab_terms
             )
-            print(f"Removing {vocab_size - len(dictionary)} terms to keep <= {args.keep_n} terms.")
+            print(
+                f"Removing {vocab_size - len(dictionary)} terms to keep <= {args.keep_n} terms."
+            )
 
     dictionary.compactify()
     print(f"Dictionary size: {len(dictionary)}")
@@ -470,7 +508,6 @@ def get_contexts(args):
         tagged=False,
         lowercase=args.lowercase,
         lemmatized=args.lemmatized,
-        # tags_allowlist=args.pos_tags,  # TODO: implement
         tags_blocklist=args.tags_blocklist,
         make_if_not_cached=True,
         persist_if_not_cached=not args.streamed,
@@ -480,7 +517,9 @@ def get_contexts(args):
     return contexts
 
 
-def normalize_weights(bow_corpus, dictionary, normalization, directory, file_name, epsilon=0.0):
+def normalize_weights(
+    bow_corpus, dictionary, normalization, directory, file_name, epsilon=0.0
+):
     if normalization:
         if normalization == "tfidf":
             corpus = tfidf_transform(bow_corpus)
@@ -523,7 +562,9 @@ def make_corpus(args, directory, file_name):
     dict_table = pd.Series(dictionary.token2id).to_frame(name="idx")
     dict_table["freq"] = dict_table["idx"].map(dictionary.cfs.get)
     dict_table = dict_table.reset_index()
-    dict_table = dict_table.set_index("idx", drop=True).rename({"index": "term"}, axis=1)
+    dict_table = dict_table.set_index("idx", drop=True).rename(
+        {"index": "term"}, axis=1
+    )
     dict_table = dict_table.sort_index()
     file_path = directory / f"{file_name}_dict.csv"
     print(f"Saving {file_path}")
@@ -539,7 +580,12 @@ def make_corpus(args, directory, file_name):
         bow_corpus = load_bow_corpus(directory, file_name)
 
     corpus = normalize_weights(
-        bow_corpus, dictionary, args.normalization, directory, file_name, epsilon=args.epsilon
+        bow_corpus,
+        dictionary,
+        args.normalization,
+        directory,
+        file_name,
+        epsilon=args.epsilon,
     )
 
     return corpus, dictionary
@@ -581,7 +627,12 @@ def load_corpus(args, directory, file_name):
         print(e)
         bow_corpus = load_bow_corpus(directory, file_name)
         corpus = normalize_weights(
-            bow_corpus, dictionary, args.normalization, directory, file_name, epsilon=args.epsilon
+            bow_corpus,
+            dictionary,
+            args.normalization,
+            directory,
+            file_name,
+            epsilon=args.epsilon,
         )
 
     return corpus, dictionary
@@ -599,7 +650,9 @@ def get_sparse_corpus(args, directory, file_name):
                 except Exception as e:
                     print(e)
                     with open(args.dictionary_path) as fp:
-                        dictionary = {line.strip(): i for i, line in enumerate(fp.readlines())}
+                        dictionary = {
+                            line.strip(): i for i, line in enumerate(fp.readlines())
+                        }
             else:
                 corpus, dictionary = load_corpus(args, directory, file_name)
         except FileNotFoundError as e:
@@ -669,8 +722,6 @@ def make_lsi(corpus, dictionary, args, directory, file_name):
 
 
 def load_lsi(directory, file_name):
-    # --- load document vectors ---
-    # TODO: file name is irregular
     file_path = directory / f"{file_name}_lsi_gensim_cent_document_vectors.csv"
     print(f"Loading document vectors from {file_path}")
     document_vectors = pd.read_csv(file_path, index_col=0, dtype=np.float32)
@@ -704,7 +755,6 @@ def load_d2v_model(model_path, center, corpus):
         dv_mean = document_vectors.mean(axis=0)
         document_vectors -= dv_mean
 
-    # TODO: nasty hack to fix id offset by 1
     if len(document_vectors) == len(corpus) + 1:
         document_vectors = document_vectors[1:]
 
@@ -736,7 +786,9 @@ def main():
     if args.d2v_model:
         document_vectors = load_d2v_model(args.d2v_model, args.center, corpus)
     else:
-        document_vectors = get_lsi_corpus(corpus, dictionary, args, directory, file_name)
+        document_vectors = get_lsi_corpus(
+            corpus, dictionary, args, directory, file_name
+        )
 
     # --- calculate SemD for vocabulary ---
     if args.terms:
@@ -754,7 +806,9 @@ def main():
             terms = dictionary.keys()
         project_suffix = f"_{args.project}" if args.project else ""
         file_path = directory / f"{file_name}{project_suffix}.semd"
-    semd_values = calculate_semantic_diversity(terms, dictionary, corpus, document_vectors)
+    semd_values = calculate_semantic_diversity(
+        terms, dictionary, corpus, document_vectors
+    )
 
     # - save SemD values for vocabulary -
     print(f"Saving SemD values to {file_path}")

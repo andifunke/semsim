@@ -5,24 +5,24 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-
 from gensim import models
 from gensim.models.doc2vec import Doc2Vec
 from gensim.models.word2vec import Word2Vec
 
+# loading gt EN
+from semsim.constants import METRICS_DIR, VECTORS_DIR, SEMD_DIR
 
 # --- load ground truth ---
 
-# loading gt EN
-from semsim.constants import DATA_DIR, TMP_DIR
-
-sj_file_en = TMP_DIR / "synonym_judgement/cueing study stimuli for distribution.csv"
+sj_file_en = (
+    METRICS_DIR / "synonym_judgement" / "cueing_study_stimuli_for_distribution.csv"
+)
 sj_en_full = pd.read_csv(sj_file_en)
 sj_en = sj_en_full[["Probe", "Target", "Foil1", "Foil2"]]
 sj_en = sj_en[~sj_en.isna().any(axis=1)]
 
 # loading gt DE
-sj_file_de = TMP_DIR / "synonym_judgement/SJT_stimuli.csv"
+sj_file_de = METRICS_DIR / "synonym_judgement" / "SJT_stimuli.csv"
 sj_de_full = pd.read_csv(sj_file_de)
 sj_de = sj_de_full[["probe", "target", "foil1", "foil2"]]
 sj_de = sj_de[~sj_de.isna().any(axis=1)]
@@ -97,13 +97,13 @@ def convert_csv_to_w2v_format(csv_file_path, w2v_file_path):
 def example_vectors_en():
     # - pretrained vectors -
     google_w2v = models.KeyedVectors.load_word2vec_format(
-        str(DATA_DIR / "vectors/GoogleNews-vectors-negative300.bin"), binary=True
+        str(VECTORS_DIR / "GoogleNews-vectors-negative300.bin"), binary=True
     )
     synonym_judgement_accuracy(google_w2v, sj_en)
 
     # - bnc lsi vectors -
     file = "bnc_lsi_gensim_term_vectors.csv"
-    dir_path = DATA_DIR / "out/SemD/bnc_cs1000_minsz50_lc_filtered"
+    dir_path = SEMD_DIR / "bnc_cs1000_minsz50_lc_filtered"
     csv_file_path = dir_path / file
     w2v_file_path = csv_file_path.with_suffix(".w2v")
     convert_csv_to_w2v_format(csv_file_path, w2v_file_path)
@@ -114,32 +114,32 @@ def example_vectors_en():
 
 
 def example_vectors_de():
-    file = DATA_DIR / "vectors/d2v"
+    file = VECTORS_DIR / "d2v"
     print(f"Loading {file}")
     d2v = Doc2Vec.load(str(file))
     synonym_judgement_accuracy(d2v.wv, sj_de)
 
-    file = DATA_DIR / "vectors/w2v"
+    file = VECTORS_DIR / "w2v"
     print(f"Loading {file}")
     w2v = Word2Vec.load(str(file))
     synonym_judgement_accuracy(w2v.wv, sj_de)
 
-    file = DATA_DIR / "out/SemD/OP2/OnlineParticipation_lsi_gensim_term_vectors.csv"
+    file = VECTORS_DIR / "OnlineParticipation_lsi_gensim_term_vectors.csv"
     print(f"Loading {file}")
     op_lsi = models.KeyedVectors.load_word2vec_format(str(file))
     synonym_judgement_accuracy(op_lsi, sj_de)
 
-    file = DATA_DIR / "data/out/SemD/DEWAC_1000_40k/dewac_lsi_word_vectors.vec"
+    file = SEMD_DIR / "DEWAC_1000_40k/dewac_lsi_word_vectors.vec"
     print(f"Loading {file}")
     op_lsi = models.KeyedVectors.load_word2vec_format(str(file))
     synonym_judgement_accuracy(op_lsi, sj_de)
 
-    file = DATA_DIR / "out/SemD/DEWAC_1000/dewac_lsi_word_vectors.vec"
+    file = SEMD_DIR / "DEWAC_1000/dewac_lsi_word_vectors.vec"
     print(f"Loading {file}")
     op_lsi = models.KeyedVectors.load_word2vec_format(str(file))
     synonym_judgement_accuracy(op_lsi, sj_de)
 
-    file = DATA_DIR / "out/SemD/DEWAC/dewac_lsi_word_vectors.vec"
+    file = SEMD_DIR / "DEWAC/dewac_lsi_word_vectors.vec"
     print(f"Loading {file}")
     op_lsi = models.KeyedVectors.load_word2vec_format(str(file))
     synonym_judgement_accuracy(op_lsi, sj_de)
@@ -168,4 +168,4 @@ if __name__ == "__main__":
     # evaluate_d2v_vectors(DATA_DIR / 'out/models/d2v_dewac')
     # evaluate_dewac_d2v_vectors(DATA_DIR / 'out/models/d2v_dewac_vocab')
     # evaluate_d2v_vectors(DATA_DIR / 'out/models/d2v_test_vocab_B')
-    evaluate_lsi_vectors(DATA_DIR / "out/SemD/DEWAC_1000_40k_v2/dewac_lsi_word_vectors.vec")
+    evaluate_lsi_vectors(SEMD_DIR / "DEWAC_1000_40k_v2/dewac_lsi_word_vectors.vec")

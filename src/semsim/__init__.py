@@ -2,7 +2,7 @@ __all__ = [
     "__version__",
     "constants",
 ]
-__version__ = "0.1.0a2"
+__version__ = "0.2.0a0"
 
 from semsim.corpus.bnc import stream_corpus as stream_bnc
 from semsim.corpus.topiclabeling import stream_corpus as stream_tl

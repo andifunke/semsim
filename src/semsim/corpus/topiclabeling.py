@@ -12,7 +12,7 @@ from typing import Generator, List, Union, Tuple, Iterator
 import pandas as pd
 from tqdm import tqdm
 
-from semsim.constants import PathLike, NLP_DIR, CACHE_DIR, META_DIR
+from semsim.constants import PathLike, NLP_DIR, META_DIR, CORPORA_DIR, get_out_dir
 
 tqdm.pandas()
 
@@ -70,19 +70,30 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("-d", "--directory", type=str, required=False, default=NLP_DIR)
     parser.add_argument(
-        "--tags-blocklist", nargs="*", type=str, required=False, default=[], choices=TAGS
+        "--tags-blocklist",
+        nargs="*",
+        type=str,
+        required=False,
+        default=[],
+        choices=TAGS,
     )
 
     parser.add_argument("--lowercase", action="store_true", required=False)
-    parser.add_argument("--no-lowercase", dest="lowercase", action="store_false", required=False)
+    parser.add_argument(
+        "--no-lowercase", dest="lowercase", action="store_false", required=False
+    )
     parser.set_defaults(lowercase=False)
 
     parser.add_argument("--tagged", action="store_true", required=False)
-    parser.add_argument("--no-tagged", dest="tagged", action="store_false", required=False)
+    parser.add_argument(
+        "--no-tagged", dest="tagged", action="store_false", required=False
+    )
     parser.set_defaults(tagged=False)
 
     parser.add_argument("--lemmatized", action="store_true", required=False)
-    parser.add_argument("--no-lemmatized", dest="lemmatized", action="store_false", required=False)
+    parser.add_argument(
+        "--no-lemmatized", dest="lemmatized", action="store_false", required=False
+    )
     parser.set_defaults(lemmatized=False)
 
     args = parser.parse_args()
@@ -106,9 +117,6 @@ def preprocess_dewiki(df):
     df = df[df.hash.isin(GOOD_IDS_DEWIK.index)]
 
     return df
-
-
-# TODO: wrap in class and move corpus parameter to init
 
 
 def stream_corpus(
@@ -137,8 +145,6 @@ def stream_corpus(
 
     :returns: Generator that yields documents/contexts as lists of tokens.
     """
-    # TODO: Benchmark structured data formats for strings/documents/tokens
-    # TODO: experiment with memory-mapped files.
 
     if directory is None:
         directory = NLP_DIR
@@ -148,9 +154,13 @@ def stream_corpus(
 
     # filter files for certain prefixes
     pattern = re.compile(corpus, re.IGNORECASE)
-    files = sorted([f for f in directory.iterdir() if f.is_file() and pattern.match(f.name)])
+    files = sorted(
+        [f for f in directory.iterdir() if f.is_file() and pattern.match(f.name)]
+    )
     if not files:
-        raise FileNotFoundError(f"Cannot find corpus for prefix '{corpus}' in {directory}")
+        raise FileNotFoundError(
+            f"Cannot find corpus for prefix '{corpus}' in {directory}"
+        )
 
     for file in files:
         corpus_name = file.name.split("_nlp.")[0]
@@ -232,13 +242,17 @@ def infer_file_path(
 ) -> PathLike:
     """Returns a canonical file path for the given corpus and arguments."""
 
-    cs_suffix = f"_cs{chunk_size}" if isinstance(chunk_size, int) and chunk_size > 0 else ""
+    cs_suffix = (
+        f"_cs{chunk_size}" if isinstance(chunk_size, int) and chunk_size > 0 else ""
+    )
     tagged_suffix = "_tagged" if tagged else ""
     lowercase_suffix = "_lc" if lowercase else ""
     lemmatized_suffix = "_lemma" if lemmatized else ""
-    filtered_suffix = "_filtered" if tags_blocklist else ""  # TODO: read actual tags from JSON
+    filtered_suffix = "_filtered" if tags_blocklist else ""
     min_doc_size_suffix = (
-        f"_minsz{min_doc_size}" if isinstance(min_doc_size, int) and min_doc_size > 0 else ""
+        f"_minsz{min_doc_size}"
+        if isinstance(min_doc_size, int) and min_doc_size > 0
+        else ""
     )
     file_suffix = ".txt" if with_suffix else ""
     file_name = (
@@ -251,7 +265,7 @@ def infer_file_path(
         f"{filtered_suffix}"
         f"{file_suffix}"
     )
-    file_path = CACHE_DIR / "corpora" / corpus / file_name
+    file_path = CORPORA_DIR / corpus / "out" / file_name
 
     return file_path
 
@@ -369,7 +383,7 @@ def load_from_cache(
     """
     as_stream &= not persist_if_not_cached
 
-    out_path = CACHE_DIR / "corpora" / corpus / f"{version}.txt"
+    out_path = get_out_dir(corpus, make=True) / f"{version}.txt"
     if not out_path.exists():
         out_path = infer_file_path(
             corpus=corpus,
@@ -380,7 +394,6 @@ def load_from_cache(
             lemmatized=lemmatized,
             tags_blocklist=tags_blocklist,
         )
-    # TODO: read meta data first and verify identity of tags_blocklist
 
     fp = None
     try:
